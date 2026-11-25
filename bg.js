@@ -14,19 +14,27 @@ export async function cutout(blob, onProgress) {
     output: { format: 'image/png' },
     progress: (key, current, total) => onProgress?.(key, current, total),
   });
-  return finish(png);
+  return finish(png, blob);
 }
 
 // Turn a transparent cutout into the stored studio shot. Also used to upgrade older PNG cutouts
 // without running the model again.
-export async function finish(png, maxEdge = 900) {
+export async function finish(png, original = null, maxEdge = 900) {
   const bmp = await createImageBitmap(png);
   const c = document.createElement('canvas');
   c.width = bmp.width; c.height = bmp.height;
   const g = c.getContext('2d', { willReadFrequently: true });
   g.drawImage(bmp, 0, 0);
   const img = g.getImageData(0, 0, c.width, c.height);
-  hardenEdges(img);
+  if (original) {
+    // Use the untouched photo's colours to settle pixels the model was unsure about.
+    const ob = await createImageBitmap(original);
+    g.drawImage(ob, 0, 0, c.width, c.height);
+    const orig = g.getImageData(0, 0, c.width, c.height);
+    refineByColour(img, orig);
+  } else {
+    hardenEdges(img);
+  }
   keepMainObject(img);
   g.putImageData(img, 0, 0);
 
@@ -46,6 +54,76 @@ export async function finish(png, maxEdge = 900) {
   o.shadowOffsetY = Math.round(Math.max(gw, gh) * 0.018);
   o.drawImage(c, x0, y0, w, h, pad, pad, gw, gh);
   return new Promise(res => out.toBlob(res, 'image/jpeg', 0.86));
+}
+
+// Colour refinement. The model is confident about most of the garment and most of the rug; where it
+// hesitates (a sleeve edge on textured fur), the colours usually still differ clearly. Learn a colour
+// profile for each side from the confident pixels, then decide uncertain pixels near the garment by
+// which profile their colour fits. Far-away pixels are never pulled in, so stray fluff stays out.
+function refineByColour(img, orig) {
+  const a = img.data, o = orig.data, { width: W, height: H } = img;
+  const N = W * H, FG = 200, BG = 20;
+  const hf = new Float32Array(4096), hb = new Float32Array(4096);
+  let nf = 0, nb = 0;
+  const bin = i => ((o[i] >> 4) << 8) | ((o[i + 1] >> 4) << 4) | (o[i + 2] >> 4);
+  for (let p = 0; p < N; p += 2) {
+    const i = p * 4, al = a[i + 3];
+    if (al >= FG) { hf[bin(i)]++; nf++; } else if (al <= BG) { hb[bin(i)]++; nb++; }
+  }
+  if (nf < 500 || nb < 500) { hardenEdges(img); return; }
+  // Smoothed colour likelihoods, then the probability a colour belongs to the garment.
+  const post = new Float32Array(4096);
+  const blur = h => { // spread each bin over its neighbours so near colours count too
+    const out = new Float32Array(4096);
+    for (let r = 0; r < 16; r++) for (let gg = 0; gg < 16; gg++) for (let b = 0; b < 16; b++) {
+      let sum = 0;
+      for (let dr = -1; dr <= 1; dr++) for (let dg = -1; dg <= 1; dg++) for (let db = -1; db <= 1; db++) {
+        const R = r + dr, G = gg + dg, B = b + db;
+        if (R >= 0 && G >= 0 && B >= 0 && R < 16 && G < 16 && B < 16) sum += h[(R << 8) | (G << 4) | B] * (dr || dg || db ? 0.5 : 1);
+      }
+      out[(r << 8) | (gg << 4) | b] = sum;
+    }
+    return out;
+  };
+  const bf = blur(hf), bb = blur(hb);
+  for (let q = 0; q < 4096; q++) {
+    const pf = (bf[q] + 0.01) / nf, pb = (bb[q] + 0.01) / nb;
+    post[q] = pf / (pf + pb);
+  }
+  // Grow outward from the confident garment through neighbouring pixels whose colour clearly matches
+  // the garment. Growth stops at the rug's edge because rug colours fail the match.
+  const reach = Math.round(Math.max(W, H) * 0.3); // never wander more than 30% of the image away
+  const dist = new Uint16Array(N).fill(65535), queue = new Int32Array(N);
+  let qh = 0, qt = 0, confident = 0;
+  for (let p = 0; p < N; p++) if (a[p * 4 + 3] >= FG) { dist[p] = 0; queue[qt++] = p; confident++; }
+  const grown = new Uint8Array(N);
+  while (qh < qt) {
+    const p = queue[qh++], d = dist[p];
+    if (d >= reach) continue;
+    const x = p % W, y = (p / W) | 0;
+    for (const n of [x > 0 ? p - 1 : -1, x < W - 1 ? p + 1 : -1, y > 0 ? p - W : -1, y < H - 1 ? p + W : -1]) {
+      if (n < 0 || dist[n] !== 65535) continue;
+      const i = n * 4, pr = post[bin(i)], al = a[i + 3];
+      // Uncertain pixels need a reasonable colour match; pixels the model dropped need a strong one.
+      if ((al > BG && pr >= 0.55) || pr >= 0.8) { dist[n] = d + 1; grown[n] = 1; queue[qt++] = n; }
+    }
+  }
+  // Safety cap: if growth balloons, the garment and rug colours are too alike to trust it.
+  if (qt - confident > confident * 0.4) { hardenEdges(img); return; }
+  for (let p = 0; p < N; p++) {
+    const i = p * 4;
+    if (a[i + 3] >= FG || grown[p]) a[i + 3] = 255;
+    else a[i + 3] = a[i + 3] > BG && post[bin(i)] >= 0.45 ? Math.round(a[i + 3] * post[bin(i)]) : 0; // soft rim
+  }
+  // Clean single-pixel speckle: a pixel flips if most of its neighbours disagree.
+  const copy = new Uint8ClampedArray(N);
+  for (let p = 0; p < N; p++) copy[p] = a[p * 4 + 3];
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+    let on = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (copy[(y + dy) * W + x + dx] > 127) on++;
+    const i = (y * W + x) * 4;
+    if (on <= 2) a[i + 3] = 0; else if (on >= 7 && a[i + 3] < 128) a[i + 3] = 255;
+  }
 }
 
 // The model leaves pixels it is unsure about semi-transparent, which reads as a sleeve fading out
