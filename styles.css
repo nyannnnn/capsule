@@ -385,3 +385,69 @@ img.fade.in { opacity: 1; filter: none; }
   h2.section { margin-top: 44px; }
   .mast { padding-top: max(12px, env(safe-area-inset-top, 0px)); }
 }
+
+/* ---------- toast with Undo ---------- */
+#toast { display: flex; align-items: center; gap: 16px; }
+#toast.actionable { pointer-events: auto; }
+#toast .undo { background: none; border: 0; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit;
+  text-decoration: underline; text-underline-offset: 3px; padding: 6px 0; min-height: 32px; font-weight: 600; }
+
+/* ---------- skeleton ---------- */
+.skel .bar { display: block; height: 10px; background: var(--tile); margin: 6px 0; }
+.skel .bar.big { height: 40px; margin-top: 10px; }
+.skel .w30 { width: 30%; } .skel .w40 { width: 40%; } .skel .w50 { width: 50%; } .skel .w70 { width: 70%; }
+.pagehead.skel > div { width: min(420px, 100%); }
+.grid.skel .caption { display: block; }
+
+/* ---------- palette strip ---------- */
+.palette { display: flex; height: 8px; margin: -6px 0 22px; overflow: hidden; }
+.palette:empty { display: none; }
+.palette span { flex: 1; min-width: 3px; transition: flex 400ms var(--ease); }
+.palette span:hover { flex: 3; }
+
+/* ---------- piece pager ---------- */
+.pager { display: flex; align-items: center; gap: 14px; }
+.pager .of { color: var(--muted); }
+.pager .textbtn:disabled { opacity: .25; }
+.product.slide-next { animation: slideNext 380ms var(--ease) both; }
+.product.slide-prev { animation: slidePrev 380ms var(--ease) both; }
+@keyframes slideNext { from { opacity: 0; transform: translateX(24px); } }
+@keyframes slidePrev { from { opacity: 0; transform: translateX(-24px); } }
+.product .media .frame { touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.product .media .frame img { -webkit-user-drag: none; }
+@media (max-width: 899px) { .pager .of { display: none; } }
+
+/* ---------- swipe to sort ---------- */
+#sorter .frame { touch-action: pan-y; cursor: grab; user-select: none; -webkit-user-select: none; }
+#sorter .frame img { pointer-events: none; -webkit-user-drag: none; }
+#sorter .frame.dragging { cursor: grabbing; transition: none; z-index: 2; }
+#sorter .frame::after {
+  position: absolute; top: 22px; padding: 6px 12px; border: 2px solid currentColor; background: var(--bg);
+  font-size: 13px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; opacity: 0; transition: opacity 150ms;
+}
+#sorter .frame[data-hint="carry"]::after { content: 'Carry'; left: 22px; color: var(--fg); opacity: 1; transform: rotate(-8deg); }
+#sorter .frame[data-hint="toss"]::after { content: 'Toss'; right: 22px; color: var(--toss); opacity: 1; transform: rotate(8deg); }
+.swipehint { font-size: 12px; color: var(--muted); }
+@media (hover: hover) { .swipehint { display: none; } }
+
+/* ---------- flat-lay look board ---------- */
+.board { position: relative; display: grid; gap: 0; background: var(--studio); aspect-ratio: 4 / 5; max-width: 760px; padding: 4%;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); min-height: 0; overflow: hidden; }
+.board.with-outer { grid-template-areas: "outer top" "bottom shoes"; }
+.board.no-outer { grid-template-areas: "top bottom" "top shoes"; grid-template-rows: minmax(0, 1.35fr) minmax(0, .65fr); }
+.board .cell { border: 0; background: none; padding: 6%; display: block; position: relative; min-width: 0; min-height: 0; cursor: pointer; overflow: hidden; }
+.board .cell img { position: absolute; inset: 6%; width: 88%; height: 88%; object-fit: contain; transition: transform 700ms var(--ease), opacity 600ms var(--ease), filter 700ms var(--ease); }
+.board .cell:hover img { transform: scale(1.03); }
+.board.enter .cell { animation: pieceIn 700ms var(--ease) both; animation-delay: calc(var(--i) * 110ms); }
+.board.empty { display: grid; place-items: center; }
+@media (min-width: 900px) {
+  .board { aspect-ratio: 16 / 9; max-width: 1100px; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+  .board.with-outer { grid-template-areas: "outer top shoes" "outer bottom shoes"; }
+  .board.no-outer { grid-template-areas: "top bottom shoes" "top bottom shoes"; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+}
+.lookpieces { display: grid; border-top: 1px solid var(--line); margin-top: 22px; max-width: 760px; }
+.lp { display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; gap: 12px; align-items: center; border-bottom: 1px solid var(--line); min-height: 52px; }
+.lp-name { background: none; border: 0; padding: 0; text-align: left; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.lp-act { display: flex; gap: 16px; }
+.lookactions .span2 { grid-column: 1 / -1; }
+@media (min-width: 900px) { .lookpieces { max-width: 1100px; } .lookactions .span2 { grid-column: auto; } .lookactions { grid-template-columns: repeat(3, 1fr); max-width: 760px; } }

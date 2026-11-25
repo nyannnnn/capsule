@@ -1,9 +1,9 @@
 import {
   CATEGORIES, FATES, STYLES, SEASONS, REFERENCES, MODE_LABELS, itemWeight, shipPlan, marginalYenPerKg,
   measureCm, fitEstimate, similarTo, colourFamily, suggestOutfit, outfitTip, parseDecisions, claudeSummary,
-} from './logic.js?v=202611252036';
-import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611252036';
-import { cutout, finish as finishCutout, preload as preloadCutouts } from './bg.js?v=202611252036';
+} from './logic.js?v=202611252048';
+import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611252048';
+import { cutout, finish as finishCutout, preload as preloadCutouts } from './bg.js?v=202611252048';
 
 // ------------------------------------------------------------------ state
 const DEFAULT_SETTINGS = { boxTareKg: 1, carryLimitKg: 30, house: 'Max Luo', departure: '2026-12-17' };
@@ -64,10 +64,45 @@ async function makeCutout(id, blob, kind, label = '') {
 const pairMode = () => { try { return localStorage.getItem('pairs') === '1'; } catch { return false; } };
 const slotOf = it => (CATEGORIES[it.category] || CATEGORIES.other).slot;
 
-let toastTimer;
-function toast(msg) {
-  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
+let toastTimer, undoFn = null;
+// A toast can carry an Undo action; it then stays a little longer and accepts taps.
+function toast(msg, undo = null) {
+  const t = $('#toast');
+  t.innerHTML = esc(msg) + (undo ? '<button type="button" class="undo">Undo</button>' : '');
+  undoFn = undo;
+  t.classList.toggle('actionable', !!undo);
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.classList.remove('show', 'actionable'); undoFn = null; }, undo ? 5000 : 2600);
+}
+
+// Fate changes with Undo.
+async function changeFates(changes, msg) {
+  const before = changes.map(({ id }) => ({ id, fate: byId(id)?.fate || 'undecided' }));
+  await setFates(changes);
+  render();
+  toast(msg, async () => { await setFates(before); render(); toast('Undone'); });
+}
+
+// Deletes wait five seconds so they can be undone; leaving the app finishes them straight away.
+const pendingDeletes = new Map();
+function deleteLater(items, msg) {
+  const ids = new Set(items.map(i => i.id));
+  S.items = S.items.filter(i => !ids.has(i.id));
+  render();
+  const timer = setTimeout(() => flushDeletes(), 5200);
+  items.forEach(it => pendingDeletes.set(it.id, { it, timer }));
+  toast(msg, () => {
+    clearTimeout(timer);
+    items.forEach(it => pendingDeletes.delete(it.id));
+    S.items.push(...items); S.items.sort((a, b) => a.no - b.no);
+    render(); toast('Restored');
+  });
+}
+async function flushDeletes() {
+  const all = [...pendingDeletes.values()];
+  pendingDeletes.clear();
+  for (const { it, timer } of all) { clearTimeout(timer); await guard(() => S.store.deleteItem(it), 'Couldn’t delete'); }
 }
 async function guard(fn, failMsg = 'Didn’t save') {
   try { return await fn(); } catch (e) { console.error(e); toast(`${failMsg}: ${e.message || e}`); }
@@ -118,7 +153,7 @@ async function refreshUrls(items = S.items) {
 }
 async function loadAll() {
   const [items, profile, wears] = await Promise.all([S.store.listItems(), S.store.getProfile(), S.store.listWears()]);
-  S.items = items; S.profile = profile || {}; S.wears = wears || [];
+  S.items = items.filter(i => !pendingDeletes.has(i.id)); S.profile = profile || {}; S.wears = wears || [];
   await refreshUrls();
 }
 
@@ -140,7 +175,8 @@ function render() {
   const app = $('#app');
   if (S.needSignIn) { paint(app, signInView()); return; }
   if (S.view === 'look' && !S.today.outfit) shuffle();
-  const views = { archive: archiveView, look: lookView, travel: travelView, fitting: fittingView };
+  const views = S.loading ? { archive: skeletonView, look: skeletonView, travel: skeletonView, fitting: skeletonView }
+    : { archive: archiveView, look: lookView, travel: travelView, fitting: fittingView };
   const navs = () => Object.entries(VIEWS).map(([v, l]) =>
     `<button class="navlink" data-action="go" data-view="${v}" ${S.view === v ? 'aria-current="page"' : ''}>${l}</button>`).join('');
   paint(app, `
@@ -173,6 +209,13 @@ function go(view) {
   try { localStorage.setItem('view', view); } catch {}
   if (view === 'look') S.today.fresh = true;
   transition(() => { render(); scrollTo(0, 0); });
+}
+
+// Calm placeholder while the archive loads: the page keeps its shape instead of jumping.
+function skeletonView() {
+  return `<div class="pagehead skel"><div><span class="bar w30"></span><span class="bar big w50"></span></div></div>
+    <div class="grid skel" aria-hidden="true">${Array.from({ length: 8 }, () =>
+      '<div class="piece"><div class="frame"></div><div class="caption"><span class="bar w70"></span><span class="bar w40"></span></div></div>').join('')}</div>`;
 }
 
 // ------------------------------------------------------------------ sign in
@@ -227,6 +270,7 @@ function archiveView() {
       <div><span class="label">The archive</span><h2 class="display page-title">${plural(S.items.length, 'piece')}</h2></div>
       <div class="meta"><span class="label">${plural(worn, 'wear')} logged</span></div>
     </div>
+    <div class="palette" id="palette" aria-label="Colours across your wardrobe">${paletteHtml()}</div>
     <div class="toolbar">
       <div class="tabs scroll" role="tablist">${SLOT_FILTERS.map(([k, l]) =>
         `<button class="textbtn" data-action="slot" data-slot="${k}" aria-pressed="${f.slot === k}">${l}</button>`).join('')}</div>
@@ -243,6 +287,60 @@ function archiveView() {
     </div>
     <div class="grid">${list.map(pieceHtml).join('') || '<p class="muted">Nothing matches.</p>'}</div>
     <button class="btn solid block" data-action="add" style="margin-top:48px;max-width:420px">Add pieces</button>`;
+}
+
+// Wardrobe palette: one swatch per piece, sampled from its cutout, ordered from dark to light by hue.
+const swatches = (() => { try { return JSON.parse(localStorage.getItem('swatches') || '{}'); } catch { return {}; } })();
+const swatchKey = it => it.cut_path || it.thumb_path || it.photo_path;
+function paletteHtml() {
+  const list = S.items.filter(i => i.fate !== 'toss' && swatches[swatchKey(i)]).map(i => ({ it: i, c: swatches[swatchKey(i)] }));
+  queueMicrotask(fillSwatches);
+  if (!list.length) return '';
+  const hsl = ([r, g, b]) => {
+    r /= 255; g /= 255; b /= 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+    const sat = d ? d / (1 - Math.abs(2 * l - 1)) : 0;
+    let h = 0; if (d) h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return [(h * 60 + 360) % 360, sat, l];
+  };
+  // Neutrals first, dark to light; then colours around the hue wheel.
+  list.sort((a, b) => {
+    const [ha, sa, la] = hsl(a.c), [hb, sb, lb] = hsl(b.c);
+    const na = sa < 0.18 || la < 0.12, nb = sb < 0.18 || lb < 0.12;
+    if (na !== nb) return na ? -1 : 1;
+    return na ? la - lb : ha - hb || la - lb;
+  });
+  return list.map(({ it, c }) => `<span style="background:rgb(${c.join(',')})" title="${esc(it.name || catLabel(it.category))}"></span>`).join('');
+}
+let filling = false;
+async function fillSwatches() {
+  if (filling) return;
+  const todo = S.items.filter(i => swatchKey(i) && !swatches[swatchKey(i)]);
+  if (!todo.length) return;
+  filling = true;
+  try {
+    for (const it of todo) {
+      try { swatches[swatchKey(it)] = await sampleColour(await S.store.getBlob(swatchKey(it)), !!it.cut_path); } catch {}
+    }
+    try { localStorage.setItem('swatches', JSON.stringify(swatches)); } catch {}
+    const el = $('#palette'); if (el) el.innerHTML = paletteHtml();
+  } finally { filling = false; }
+}
+// Average the garment's pixels: skip the studio backdrop on cutouts, or use the centre of a raw photo.
+async function sampleColour(blob, isCut) {
+  const bmp = await createImageBitmap(blob);
+  const n = 48, c = document.createElement('canvas'); c.width = n; c.height = n;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  if (isCut) g.drawImage(bmp, 0, 0, n, n);
+  else g.drawImage(bmp, bmp.width * 0.3, bmp.height * 0.3, bmp.width * 0.4, bmp.height * 0.4, 0, 0, n, n);
+  const d = g.getImageData(0, 0, n, n).data;
+  let r = 0, gg = 0, b = 0, k = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    if (isCut && Math.abs(d[i] - 238) < 12 && Math.abs(d[i + 1] - 238) < 12 && Math.abs(d[i + 2] - 236) < 12) continue;
+    r += d[i]; gg += d[i + 1]; b += d[i + 2]; k++;
+  }
+  if (!k) throw new Error('empty');
+  return [Math.round(r / k), Math.round(gg / k), Math.round(b / k)];
 }
 
 // ------------------------------------------------------------------ add photos
@@ -284,8 +382,14 @@ async function addFiles(files) {
 }
 
 // ------------------------------------------------------------------ product page (item editor)
-function openEditor(item, blobs = null, backBlobs = null, fromEl = null) {
+const EDIT_KEYS = ['name', 'category', 'colour', 'brand', 'size', 'length_cm', 'width_cm', 'weight_g', 'condition', 'styles', 'seasons', 'fit', 'notes', 'away', 'fate'];
+const editSig = d => JSON.stringify(EDIT_KEYS.map(k => (d[k] === '' || d[k] == null) ? null : Array.isArray(d[k]) ? d[k] : String(d[k])));
+const isDirty = () => S.draft && (S.draftBlobs || S.draftBack || editSig(S.draft) !== S.draftSig);
+
+function openEditor(item, blobs = null, backBlobs = null, fromEl = null, slide = 0) {
   S.draft = { ...item, styles: [...(item.styles || [])], seasons: [...(item.seasons || [])] };
+  S.draftSig = editSig(S.draft);
+  if (slide) { S.draftBlobs = null; S.draftBack = null; S.side = 'front'; S.showOriginal = false; renderEditor(false, slide); return; }
   S.draftBlobs = blobs; S.draftBack = backBlobs; S.side = 'front'; S.showOriginal = false;
   if (blobs) S.draftUrl = URL.createObjectURL(blobs.full);
   if (backBlobs) S.draftBackUrl = URL.createObjectURL(backBlobs.full);
@@ -331,6 +435,33 @@ function editorFacts(d) {
     ${d.fate === 'ship' ? `<div class="fact"><span>Adds to sea freight</span><span>≈ ${yen(shipCostFor(d))}</span></div>` : ''}`;
 }
 
+// Previous / next within the list the piece was opened from.
+function navPos(id) { const ids = S.navIds || []; return { ids, i: ids.indexOf(id) }; }
+function navBar(d) {
+  const { ids, i } = navPos(d.id);
+  if (d._new || i < 0) return `<span class="label">No. ${pad(d.no)}</span>`;
+  return `<div class="pager">
+    <button class="textbtn" data-action="nav" data-dir="-1" ${i > 0 ? '' : 'disabled'} aria-label="Previous piece">Prev</button>
+    <span class="label">No. ${pad(d.no)}<span class="of"> · ${i + 1} of ${ids.length}</span></span>
+    <button class="textbtn" data-action="nav" data-dir="1" ${i < ids.length - 1 ? '' : 'disabled'} aria-label="Next piece">Next</button></div>`;
+}
+let navigating = false;
+async function navigate(dir) {
+  if (navigating || !S.draft || S.draft._new) return;
+  const { ids, i } = navPos(S.draft.id);
+  const next = byId(ids[i + dir]);
+  if (!next) return;
+  navigating = true;
+  try {
+    if (isDirty()) await saveDraft(false); // keep what you typed, then move on
+    if (S.draftUrl) { URL.revokeObjectURL(S.draftUrl); S.draftUrl = null; }
+    if (S.draftBackUrl) { URL.revokeObjectURL(S.draftBackUrl); S.draftBackUrl = null; }
+    await refreshUrls([next]);
+    openEditor(next, null, null, null, dir);
+    $('.sheet').scrollTop = 0;
+  } finally { navigating = false; }
+}
+
 // Update the computed parts of the piece page without redrawing inputs (keeps focus and typing intact).
 function refreshEditorBits() {
   const d = S.draft; if (!d) return;
@@ -339,7 +470,7 @@ function refreshEditorBits() {
   const f = $('#d-facts'); if (f) f.innerHTML = editorFacts(d);
 }
 
-function renderEditor(morph = false) {
+function renderEditor(morph = false, slide = 0) {
   const d = S.draft;
   const showOrig = S.showOriginal;
   const front = S.draftUrl || (showOrig ? original(d, 'front') : full(d));
@@ -354,8 +485,8 @@ function renderEditor(morph = false) {
   const field = (k, label, type = 'text', extra = '') => `<label class="field"><span class="label">${label}</span>
     <input type="${type}" id="d-${k}" data-draft="${k}" value="${esc(d[k])}" ${type === 'number' ? 'inputmode="decimal" step="0.1"' : ''} ${extra}></label>`;
   sheet(`
-    <div class="sheetbar"><span class="label">No. ${pad(d.no)}</span><button class="textbtn" data-action="close">Close</button></div>
-    <div class="product">
+    <div class="sheetbar">${navBar(d)}<button class="textbtn" data-action="close">Close</button></div>
+    <div class="product ${slide > 0 ? 'slide-next' : slide < 0 ? 'slide-prev' : ''}">
       <div class="media">
         <div class="frame contain ${isCut ? 'cut' : ''}">${src ? `<img class="fade in ${S.flipping ? 'flip' : ''}" src="${esc(src)}" alt="${S.side === 'back' ? 'Back' : 'Front'} of No. ${d.no}" ${morph ? 'style="view-transition-name:piece"' : ''}>`
           : `<span class="none">${S.side === 'back' ? 'No back photo yet' : 'No photo yet'}</span>`}</div>
@@ -408,7 +539,7 @@ function renderEditor(morph = false) {
     </div>`);
 }
 
-async function saveDraft() {
+async function saveDraft(close = true) {
   const d = S.draft;
   await guard(async () => {
     if (S.draftBlobs) {
@@ -428,7 +559,9 @@ async function saveDraft() {
     const idx = S.items.findIndex(i => i.id === saved.id);
     if (idx >= 0) S.items[idx] = saved; else S.items.push(saved);
     await refreshUrls([saved]);
-    closeSheet(); render(); toast(`Saved No. ${pad(saved.no)}`);
+    if (close) { closeSheet(); render(); }
+    else { S.draftBlobs = null; S.draftBack = null; S.draftSig = editSig(saved); }
+    toast(`Saved No. ${pad(saved.no)}`);
   });
 }
 
@@ -546,25 +679,94 @@ function lookView() {
       <div class="row">${['', ...STYLES].map(s => `<button class="textbtn" data-action="style" data-style="${s}" aria-pressed="${t.style === s}">${s || 'Any style'}</button>`).join('')}</div>
     </div>
     ${wearable < 3 ? '<p class="muted">Add a few tops, bottoms and shoes to the archive and looks will appear here.</p>' : ''}
-    <div class="look ${t.fresh ? 'enter' : ''}">
-      ${Object.entries(o).map(([slot, it], i) => `
-        <div class="piece" style="--i:${i}">
-          <div class="frame ${cutCls(it)}">${it ? photo(it) : '<span class="none">Nothing suitable</span>'}</div>
-          <div class="caption"><span class="name">${it ? esc(it.name || catLabel(it.category)) : '—'}</span><span class="no">${it ? 'No. ' + pad(it.no) : ''}</span>
-            <span class="sub">${slotNames[slot]}</span></div>
-          <div class="slotrow">
+    ${boardHtml(o, t.fresh)}
+    <div class="lookpieces">
+      ${Object.entries(o).map(([slot, it]) => `
+        <div class="lp">
+          <span class="label">${slotNames[slot]}</span>
+          <button class="lp-name" ${it ? `data-action="open" data-id="${it.id}"` : 'disabled'}>${it ? `${esc(it.name || catLabel(it.category))} <span class="muted">No. ${pad(it.no)}</span>` : 'Nothing suitable'}</button>
+          <span class="lp-act">
             <button class="textbtn" data-action="lock" data-slot="${slot}" aria-pressed="${!!t.locked[slot]}" ${it ? '' : 'disabled'}>${t.locked[slot] ? 'Kept' : 'Keep'}</button>
             <button class="textbtn" data-action="swap" data-slot="${slot}">Swap</button>
-          </div>
+          </span>
         </div>`).join('')}
     </div>
     <div class="lookactions">
       <button class="btn" data-action="shuffle">New look</button>
       <button class="btn solid" data-action="wear-outfit">Wear this look</button>
+      <button class="btn quiet span2" data-action="save-look">Save as image</button>
     </div>
     ${recent.length ? `<h2 class="section">Recently worn</h2><div class="history">${recent.map(w => `
       <div class="h"><span class="muted">${esc(w.worn_on)}</span>
       <span>${w.item_ids.map(byId).filter(Boolean).map(i => esc(i.name || catLabel(i.category))).join(', ')}</span></div>`).join('')}</div>` : ''}`;
+}
+
+// Flat-lay board: pieces laid out like an editorial spread on the studio colour.
+function boardLayout(o) {
+  const has = k => o[k];
+  const top = has('top') ? 'top' : has('sport') ? 'sport' : null;
+  if (has('outer')) return { cls: 'with-outer', areas: { outer: 'outer', [top]: 'top', bottom: 'bottom', shoes: 'shoes' } };
+  return { cls: 'no-outer', areas: { [top]: 'top', bottom: 'bottom', shoes: 'shoes' } };
+}
+function boardHtml(o, fresh) {
+  const { cls, areas } = boardLayout(o);
+  const cells = Object.entries(areas).filter(([slot]) => slot && slot !== 'null' && o[slot]);
+  if (!cells.length) return '<div class="board empty"><span class="label">Your look appears here</span></div>';
+  return `<div class="board ${cls} ${fresh ? 'enter' : ''}">${cells.map(([slot, area], i) => {
+    const it = o[slot], src = full(it);
+    return `<button class="cell" style="grid-area:${area};--i:${i}" data-action="open" data-id="${it.id}" aria-label="${esc(it.name || catLabel(it.category))}">
+      ${src ? `<img class="fade" src="${esc(src)}" alt="">` : ''}</button>`;
+  }).join('')}</div>`;
+}
+
+// Save the look as a portrait image (4:5), ready to share or post.
+async function saveLookImage() {
+  const o = S.today.outfit || {};
+  const { areas } = boardLayout(o);
+  const cells = Object.entries(areas).filter(([slot]) => slot && slot !== 'null' && o[slot]);
+  if (!cells.length) return toast('No look to save yet');
+  toast('Making the image');
+  await document.fonts?.ready;
+  const W = 1080, H = 1350, M = 64, top = 150, foot = 170;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  g.fillStyle = '#EEEEEC'; g.fillRect(0, 0, W, H);
+  const cw = (W - M * 2) / 2, ch = (H - top - foot) / 2;
+  const withOuter = !!o.outer;
+  const rect = {
+    outer: [M, top, cw, ch], top: withOuter ? [M + cw, top, cw, ch] : [M, top, cw, ch * 2],
+    bottom: withOuter ? [M, top + ch, cw, ch] : [M + cw, top, cw, ch * 1.35], shoes: withOuter ? [M + cw, top + ch, cw, ch] : [M + cw, top + ch * 1.35, cw, ch * 0.65],
+  };
+  for (const [slot, area] of cells) {
+    const it = o[slot], path = it.cut_path || it.photo_path || it.thumb_path;
+    if (!path) continue;
+    try {
+      const bmp = await createImageBitmap(await S.store.getBlob(path));
+      const [x, y, w, h] = rect[area], pad = 18;
+      const sc = Math.min((w - pad * 2) / bmp.width, (h - pad * 2) / bmp.height);
+      g.drawImage(bmp, x + (w - bmp.width * sc) / 2, y + (h - bmp.height * sc) / 2, bmp.width * sc, bmp.height * sc);
+    } catch (e) { console.warn(e); }
+  }
+  const house = (settings().house || 'Capsule').toUpperCase();
+  g.fillStyle = '#000'; g.textAlign = 'center';
+  g.font = '600 30px "Inter Tight", Arial, sans-serif';
+  g.letterSpacing = '10px';
+  g.fillText(house, W / 2, 92);
+  g.letterSpacing = '0px';
+  const lookNo = S.wears.length + 1, temp = S.today.feels ?? S.today.tempC;
+  g.font = '500 64px "Bodoni Moda", Didot, Georgia, serif';
+  g.fillText(`Look ${lookNo}`, W / 2, H - 92);
+  g.font = '500 20px "Inter Tight", Arial, sans-serif';
+  g.letterSpacing = '4px'; g.fillStyle = '#6E6E6E';
+  const date = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long' }).toUpperCase();
+  g.fillText([date, temp != null ? Math.round(temp) + '°C' : ''].filter(Boolean).join('   ·   '), W / 2, H - 46);
+  const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
+  const file = new File([blob], `look-${lookNo}.jpg`, { type: 'image/jpeg' });
+  try {
+    if (navigator.canShare?.({ files: [file] })) { await navigator.share({ files: [file] }); return; }
+  } catch (e) { if (e.name === 'AbortError') return; }
+  download(blob, file.name);
+  toast('Look saved');
 }
 
 async function locate() {
@@ -674,6 +876,7 @@ function sorterHtml(list) {
         <button class="btn" data-action="decide" data-id="${it.id}" data-fate="ship">Ship <span class="kbd">S</span></button>
         <button class="btn toss" data-action="decide" data-id="${it.id}" data-fate="toss">Toss <span class="kbd">T</span></button>
       </div>
+      <p class="swipehint">Or swipe the photo: right to carry, left to toss.</p>
       <button class="textbtn" data-action="open" data-id="${it.id}" style="justify-self:start">Edit details</button>
     </div></div>`;
 }
@@ -705,14 +908,18 @@ async function setFates(changes) {
 }
 
 let deciding = false;
+async function decideNow(id, fate) {
+  const it = byId(id); if (!it) return;
+  await changeFates([{ id, fate }], `No. ${pad(it.no)} → ${FATE_NAMES[fate]}`);
+}
 async function decide(id, fate) {
   if (deciding) return;
   deciding = true;
   try {
     const el = $('#sorter');
     if (el && !reduced()) { el.classList.add('leave-' + fate); await new Promise(r => setTimeout(r, 300)); }
-    await setFates([{ id, fate }]);
-    render();
+    const it = byId(id);
+    await changeFates([{ id, fate }], `No. ${pad(it.no)} → ${FATE_NAMES[fate]}`);
   } finally { deciding = false; }
 }
 
@@ -949,6 +1156,12 @@ async function cleanAll() {
 
 // ------------------------------------------------------------------ events
 document.addEventListener('click', async e => {
+  if (e.target.closest('#toast .undo')) {
+    const f = undoFn; undoFn = null; clearTimeout(toastTimer);
+    $('#toast').classList.remove('show', 'actionable');
+    if (f) await f();
+    return;
+  }
   const el = e.target.closest('[data-action]');
   if (!el) return;
   const a = el.dataset.action;
@@ -974,11 +1187,18 @@ document.addEventListener('click', async e => {
     case 'pick': closeSheet(false); $('#pick').click(); break;
     case 'slot': S.filter.slot = el.dataset.slot; transition(render); break;
     case 'open': {
+      S.navIds = (S.view === 'archive' ? filtered() : S.view === 'travel'
+        ? S.items.filter(i => (i.fate || 'undecided') === S.pack.tab).sort((a, b) => a.no - b.no)
+        : S.items.slice().sort((a, b) => a.no - b.no)).map(i => i.id);
       const it = byId(el.dataset.id);
       if (it) { await refreshUrls([it]); openEditor(it, null, null, el.classList.contains('piece') ? el : null); }
       break;
     }
-    case 'close': closeSheet(); break;
+    case 'close':
+      if (isDirty() && S.draft && !S.draft._new) await saveDraft(true); // closing keeps your edits
+      else closeSheet();
+      break;
+    case 'nav': navigate(Number(el.dataset.dir)); break;
     case 'toggle-chip': {
       const list = S.draft[el.dataset.key], v = el.dataset.val;
       const i = list.indexOf(v); i >= 0 ? list.splice(i, 1) : list.push(v);
@@ -1037,16 +1257,17 @@ document.addEventListener('click', async e => {
       break;
     }
     case 'save': await saveDraft(); break;
-    case 'delete':
-      if (await ask(`Delete No. ${pad(S.draft.no)} and its photo? This can’t be undone.`, 'Delete', true)) {
-        const id = S.draft.id;
-        await guard(async () => { await S.store.deleteItem(S.draft); S.items = S.items.filter(i => i.id !== id); });
-        closeSheet(); render(); toast('Deleted');
-      } break;
+    case 'delete': {
+      const it = byId(S.draft.id) || S.draft;
+      closeSheet();
+      deleteLater([it], `Deleted No. ${pad(it.no)}`);
+      break;
+    }
     case 'wear-one': await wearItems([S.draft.id]); S.draft = { ...byId(S.draft.id), styles: S.draft.styles, seasons: S.draft.seasons }; renderEditor(); break;
     case 'locate': locate(); break;
     case 'style': S.today.style = el.dataset.style; S.today.locked = {}; shuffle(); render(); break;
     case 'shuffle': shuffle(); render(); break;
+    case 'save-look': saveLookImage(); break;
     case 'lock': { const slot = el.dataset.slot; S.today.locked[slot] ? delete S.today.locked[slot] : (S.today.locked[slot] = S.today.outfit[slot]); render(); break; }
     case 'swap': {
       const slot = el.dataset.slot, cur = S.today.outfit[slot];
@@ -1072,14 +1293,13 @@ document.addEventListener('click', async e => {
     }
     case 'delete-tossed': {
       const pile = S.items.filter(i => i.fate === 'toss');
-      if (!(await ask(`Permanently remove ${plural(pile.length, 'tossed piece')} and their photos? This can’t be undone.`, 'Remove', true))) return;
-      for (const it of pile) await guard(() => S.store.deleteItem(it));
-      S.items = S.items.filter(i => i.fate !== 'toss'); render(); toast(`Removed ${plural(pile.length, 'piece')}`); break;
+      if (!pile.length) break;
+      deleteLater(pile, `Removed ${plural(pile.length, 'tossed piece')}`); break;
     }
     case 'copy-summary': copySummary(); break;
     case 'contact-sheet': contactSheets(el.dataset.scope); break;
     case 'preview-decisions': previewDecisions(); break;
-    case 'apply-decisions': await setFates(S.decisions || []); toast(`Applied ${plural(S.decisions.length, 'decision')}`); S.decisions = null; render(); break;
+    case 'apply-decisions': { const ch = S.decisions || []; S.decisions = null; await changeFates(ch, `Applied ${plural(ch.length, 'decision')}`); break; }
     case 'buy-check': buyCheck(); break;
     case 'backup': backup(); break;
     case 'restore': $('#importfile').click(); break;
@@ -1091,7 +1311,7 @@ document.addEventListener('change', async e => {
   const t = e.target;
   if (t.id === 'pick' || t.id === 'camera') { await addFiles(t.files); t.value = ''; return; }
   if (t.id === 'importfile') { if (t.files[0]) await restore(t.files[0]); t.value = ''; return; }
-  if (t.dataset.action === 'refate') { await setFates([{ id: t.dataset.id, fate: t.value }]); render(); return; }
+  if (t.dataset.action === 'refate') { const it = byId(t.dataset.id); await changeFates([{ id: t.dataset.id, fate: t.value }], `No. ${pad(it.no)} moved to ${FATE_NAMES[t.value]}`); return; }
   if (t.dataset.bind === 'filter.fate' || t.dataset.bind === 'filter.sort') { S.filter[t.dataset.bind.slice(7)] = t.value; transition(render); return; }
   if (t.dataset.bind === 'today.manual') {
     const v = parseFloat(t.value);
@@ -1134,6 +1354,9 @@ document.addEventListener('submit', async e => {
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && $('#sheet-root').innerHTML) { closeSheet(); return; }
+  if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && S.draft && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) {
+    e.preventDefault(); navigate(e.key === 'ArrowRight' ? 1 : -1); return;
+  }
   // Sorting shortcuts on a laptop: C carry, S ship, T toss.
   if (S.view !== 'travel' || S.pack.tab !== 'undecided' || $('#sheet-root').innerHTML) return;
   if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName) || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -1142,13 +1365,95 @@ document.addEventListener('keydown', e => {
   if (btn) { e.preventDefault(); decide(btn.dataset.id, fate); }
 });
 
+// ------------------------------------------------------------------ gestures
+// Sorter: drag the card right to carry, left to toss. Piece page: swipe the photo for next / previous.
+let drag = null;
+document.addEventListener('pointerdown', e => {
+  if (e.button > 0) return;
+  const card = e.target.closest('#sorter .frame');
+  const photoEl = !card && e.target.closest('.product .media .frame');
+  if (!card && !photoEl) return;
+  drag = { el: card || photoEl, kind: card ? 'sort' : 'page', x0: e.clientX, y0: e.clientY, dx: 0, active: false, pid: e.pointerId };
+});
+document.addEventListener('pointermove', e => {
+  if (!drag || e.pointerId !== drag.pid) return;
+  const dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
+  if (!drag.active) {
+    if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+      drag.active = true;
+      try { drag.el.setPointerCapture(e.pointerId); } catch {}
+      drag.el.classList.remove('arrive'); drag.el.classList.add('dragging');
+    } else if (Math.abs(dy) > 12) { drag = null; return; } // a vertical swipe is a scroll
+    else return;
+  }
+  drag.dx = dx;
+  if (drag.kind === 'sort') {
+    drag.el.style.transform = `translateX(${dx}px) rotate(${dx / 28}deg)`;
+    drag.el.dataset.hint = dx > 70 ? 'carry' : dx < -70 ? 'toss' : '';
+  } else {
+    drag.el.style.transform = `translateX(${dx * 0.35}px)`;
+  }
+});
+function endDrag(cancel) {
+  if (!drag) return;
+  const d = drag; drag = null;
+  if (!d.active) return;
+  d.el.classList.remove('dragging');
+  const go = !cancel && Math.abs(d.dx) > 90;
+  if (d.kind === 'sort' && go) {
+    const fate = d.dx > 0 ? 'carry' : 'toss';
+    const id = $('#sorter [data-action="decide"]')?.dataset.id;
+    d.el.style.transition = 'transform 260ms var(--ease), opacity 260ms var(--ease)';
+    d.el.style.transform = `translateX(${d.dx > 0 ? 140 : -140}%) rotate(${d.dx > 0 ? 14 : -14}deg)`;
+    d.el.style.opacity = '0';
+    setTimeout(() => { if (id) { deciding = false; decideNow(id, fate); } }, 240);
+    return;
+  }
+  d.el.style.transition = 'transform 260ms var(--ease)';
+  d.el.style.transform = ''; d.el.dataset.hint = '';
+  setTimeout(() => { d.el.style.transition = ''; }, 280);
+  if (d.kind === 'page' && go) navigate(d.dx < 0 ? 1 : -1);
+}
+document.addEventListener('dragstart', e => { if (e.target.tagName === 'IMG') e.preventDefault(); }); // no ghost-image drags
+document.addEventListener('pointerup', () => endDrag(false));
+document.addEventListener('pointercancel', () => endDrag(true));
+// Suppress the click that follows a drag, so a swipe never opens or toggles anything.
+document.addEventListener('click', e => { if (e.target.closest('.dragging')) { e.stopPropagation(); e.preventDefault(); } }, true);
+
+// ------------------------------------------------------------------ keep devices in sync
+let lastSync = Date.now(), syncing = false;
+const signature = () => JSON.stringify([S.items, S.wears.length, S.profile]);
+async function syncNow(force = false) {
+  if (syncing || S.needSignIn || S.loading || S.store.mode !== 'cloud') return;
+  if (!force && Date.now() - lastSync < 15000) return;
+  if ($('#sheet-root').innerHTML || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return; // never yank a screen you're editing
+  syncing = true;
+  try {
+    const before = signature();
+    await loadAll();
+    lastSync = Date.now();
+    if (signature() !== before) {
+      if (S.today.outfit) for (const k of Object.keys(S.today.outfit)) S.today.outfit[k] = S.today.outfit[k] && byId(S.today.outfit[k].id) || null;
+      const y = scrollY; render(); scrollTo(0, y);
+    }
+  } catch (e) { console.warn('sync failed', e); } finally { syncing = false; }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') syncNow();
+  else flushDeletes();
+});
+addEventListener('focus', () => syncNow());
+addEventListener('pagehide', () => { flushDeletes(); });
+
 // ------------------------------------------------------------------ boot
 (async () => {
   try { const t = localStorage.getItem('theme'); if (t) document.documentElement.dataset.theme = t; } catch {}
   try {
     const { signedIn } = await S.store.init();
     if (!signedIn) { S.needSignIn = true; render(); return; }
+    S.loading = true; render();
     await loadAll();
+    S.loading = false; lastSync = Date.now();
     render();
   } catch (e) {
     console.error(e);
