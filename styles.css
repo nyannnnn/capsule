@@ -35,7 +35,8 @@
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; }
+html, body { margin: 0; overflow-x: clip; } /* nothing can push the page sideways */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 body {
   background: var(--bg); color: var(--fg);
   font-family: var(--sans); font-size: 15px; line-height: 1.5; letter-spacing: -.005em;
@@ -172,6 +173,7 @@ label.field .label, .field > .label { display: block; }
 
 /* ---------- archive grid ---------- */
 .toolbar { display: grid; gap: 4px; }
+.toolbar > * { min-width: 0; }
 .toolbar .row { gap: 18px; }
 .toolbar .search { max-width: 420px; }
 @media (max-width: 719px) { .toolbar .search { flex-basis: 100%; max-width: none; } .controls .row { gap: 4px 20px; } }
@@ -213,6 +215,7 @@ img.fade.in { opacity: 1; filter: none; }
   background: var(--bg); width: 100%; max-height: 100dvh; height: 100dvh; overflow: auto;
   animation: sheetIn 460ms var(--ease) both;
   padding-bottom: env(safe-area-inset-bottom, 0px);
+  overscroll-behavior: contain; -webkit-overflow-scrolling: touch; /* swipes scroll the panel, never the page behind */
 }
 @keyframes sheetIn { from { transform: translateY(28px); opacity: 0; } }
 .sheet.closing { animation: sheetOut 260ms var(--ease) both; }
@@ -366,4 +369,19 @@ img.fade.in { opacity: 1; filter: none; }
   *, *::before, *::after { animation-duration: 1ms !important; animation-delay: 0ms !important; transition-duration: 1ms !important; }
   ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
   img.fade { opacity: 1; filter: none; }
+}
+
+/* ---------- phones ---------- */
+@media (max-width: 899px) {
+  /* iOS zooms into any field under 16px when tapped and leaves the page zoomed; 16px prevents that. */
+  input[type=text], input[type=number], input[type=email], input[type=password], input[type=search], select, textarea { font-size: 16px; }
+  .toolbar select { font-size: 13px; }
+  .pagehead { padding: 24px 0 18px; }
+  .pagehead .meta { display: none; }
+  .lookhead, .travelhead { padding-top: 24px; }
+  .toolbar .row.spread { margin-bottom: 20px !important; }
+  .grid { gap: 26px 12px; }
+  .caption { font-size: 12.5px; }
+  h2.section { margin-top: 44px; }
+  .mast { padding-top: max(12px, env(safe-area-inset-top, 0px)); }
 }
