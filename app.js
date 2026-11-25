@@ -1,9 +1,9 @@
 import {
   CATEGORIES, FATES, STYLES, SEASONS, REFERENCES, MODE_LABELS, itemWeight, shipPlan, marginalYenPerKg,
   measureCm, fitEstimate, similarTo, colourFamily, suggestOutfit, outfitTip, parseDecisions, claudeSummary,
-} from './logic.js?v=202611252048';
-import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611252048';
-import { cutout, finish as finishCutout, preload as preloadCutouts } from './bg.js?v=202611252048';
+} from './logic.js?v=202611252057';
+import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611252057';
+import { cutout, finish as finishCutout, preload as preloadCutouts } from './bg.js?v=202611252057';
 
 // ------------------------------------------------------------------ state
 const DEFAULT_SETTINGS = { boxTareKg: 1, carryLimitKg: 30, house: 'Max Luo', departure: '2026-12-17' };
@@ -179,22 +179,42 @@ function render() {
     : { archive: archiveView, look: lookView, travel: travelView, fitting: fittingView };
   const navs = () => Object.entries(VIEWS).map(([v, l]) =>
     `<button class="navlink" data-action="go" data-view="${v}" ${S.view === v ? 'aria-current="page"' : ''}>${l}</button>`).join('');
+  const tabs = () => Object.entries(VIEWS).map(([v, l]) =>
+    `<button class="tab" data-action="go" data-view="${v}" ${S.view === v ? 'aria-current="page"' : ''}>${TAB_ICONS[v]}<span>${l}</span></button>`).join('');
   paint(app, `
     <header class="mast">
       <nav aria-label="Sections">${navs()}</nav>
       <h1 class="wordmark ${S.introDone ? '' : 'intro'}">${wordmark()}</h1>
       <div class="right">
         <button class="textbtn add" data-action="add">Add pieces</button>
-        <button class="textbtn" data-action="theme" aria-label="Switch between light and dark">${themeLabel()}</button>
+        <button class="textbtn themebtn" data-action="theme" aria-label="Switch between light and dark">${themeLabel()}</button>
+        <button class="iconbtn addicon" data-action="add" aria-label="Add pieces"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
       </div>
     </header>
     <main><div class="view" data-view="${S.view}">${views[S.view]()}</div></main>
-    <nav class="tabbar" aria-label="Sections">${navs()}</nav>
+    <nav class="tabbar" aria-label="Sections">${tabs()}</nav>
+    ${installTip()}
     <input type="file" id="pick" accept="image/*" multiple hidden>
     <input type="file" id="camera" accept="image/*" capture="environment" hidden>
     <input type="file" id="importfile" accept="application/json" hidden>`);
   S.introDone = true;
   S.today.fresh = false;
+}
+
+const TAB_ICONS = {
+  archive: '<svg viewBox="0 0 24 24"><path d="M12 7.2a2.1 2.1 0 1 1 2.1 2.1c-1 .2-2.1.8-2.1 2.1m0 0L3.4 17c-.8.5-.5 1.6.5 1.6h16.2c1 0 1.3-1.1.5-1.6L12 11.4"/></svg>',
+  look: '<svg viewBox="0 0 24 24"><path d="M9 3.8 4.2 6.4l1.6 4.2 1.9-.7V20.2h8.6V9.9l1.9.7 1.6-4.2L15 3.8c-.5 1.4-1.6 2.3-3 2.3S9.5 5.2 9 3.8z"/></svg>',
+  travel: '<svg viewBox="0 0 24 24"><rect x="4" y="7.5" width="16" height="12.5" rx="1"/><path d="M9 7.5V5h6v2.5M8 11v6M16 11v6"/></svg>',
+  fitting: '<svg viewBox="0 0 24 24"><path d="M3.5 16.5 16.5 3.5l4 4-13 13z"/><path d="M7.5 12.5l1.8 1.8M10.5 9.5l1.8 1.8M13.5 6.5l1.8 1.8"/></svg>',
+};
+
+// One-time tip on iPhone Safari: opened from the Home Screen, Capsule runs full screen like an app.
+function installTip() {
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  let dismissed = false; try { dismissed = localStorage.getItem('installTip') === 'done'; } catch {}
+  if (!ios || navigator.standalone || dismissed) return '';
+  return `<div class="installtip" role="note"><span>For the full-screen app: tap <b>Share</b>, then <b>Add to Home Screen</b>.</span>
+    <button class="textbtn" data-action="dismiss-tip">Got it</button></div>`;
 }
 
 function themeLabel() {
@@ -276,7 +296,10 @@ function archiveView() {
         `<button class="textbtn" data-action="slot" data-slot="${k}" aria-pressed="${f.slot === k}">${l}</button>`).join('')}</div>
       <div class="row spread" style="margin-bottom:28px">
         <input type="search" id="search" class="search grow" placeholder="Search name, brand, colour or number" value="${esc(f.q)}" data-bind="filter.q" aria-label="Search the archive">
-        <div class="row">
+        <button class="iconbtn filterbtn" data-action="filters" aria-label="Sort and filter">
+          <svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>${f.fate || f.sort !== 'no' ? '<i class="dot"></i>' : ''}
+        </button>
+        <div class="row selects">
           <select id="fate-filter" data-bind="filter.fate" aria-label="Filter by fate"><option value="">Any fate</option>
             ${Object.keys(FATES).map(k => `<option value="${k}" ${f.fate === k ? 'selected' : ''}>${FATE_NAMES[k]}</option>`).join('')}</select>
           <select id="sort" data-bind="filter.sort" aria-label="Sort">
@@ -415,8 +438,8 @@ function closeSheet(animate = true) {
   setTimeout(finish, 240);
 }
 
-function sheet(html) {
-  paint($('#sheet-root'), `<div class="scrim" data-action="scrim"><div class="sheet" role="dialog" aria-modal="true">${html}</div></div>`);
+function sheet(html, variant = '') {
+  paint($('#sheet-root'), `<div class="scrim ${variant}" data-action="scrim"><div class="sheet ${variant}" role="dialog" aria-modal="true">${html}</div></div>`);
   document.body.style.overflow = 'hidden';
 }
 
@@ -485,6 +508,7 @@ function renderEditor(morph = false, slide = 0) {
   const field = (k, label, type = 'text', extra = '') => `<label class="field"><span class="label">${label}</span>
     <input type="${type}" id="d-${k}" data-draft="${k}" value="${esc(d[k])}" ${type === 'number' ? 'inputmode="decimal" step="0.1"' : ''} ${extra}></label>`;
   sheet(`
+    <div class="grabber" aria-hidden="true"></div>
     <div class="sheetbar">${navBar(d)}<button class="textbtn" data-action="close">Close</button></div>
     <div class="product ${slide > 0 ? 'slide-next' : slide < 0 ? 'slide-prev' : ''}">
       <div class="media">
@@ -496,10 +520,13 @@ function renderEditor(morph = false, slide = 0) {
             <button type="button" data-action="side" data-side="back" aria-pressed="${S.side === 'back'}">Back</button>
           </div>
           <div class="tools">
-            ${hasCut ? `<button class="btn" data-action="toggle-original">${showOrig ? 'Cutout' : 'Original'}</button>` : ''}
-            ${!d._new && (S.side === 'back' ? d.back_path && !S.draftBackUrl : d.photo_path && !S.draftUrl) ? `<button class="btn" data-action="redo-cut">${hasCut ? 'Redo cutout' : 'Make cutout'}</button>` : ''}
             ${src ? '<button class="btn" data-action="measure">Measure</button>' : ''}
-            <button class="btn" data-action="replace-photo" data-side="${S.side}">${src ? 'Replace' : 'Add'} ${S.side === 'back' ? 'back' : 'photo'}</button>
+            <button class="btn more" data-action="more-tools" aria-expanded="false" aria-label="More photo options">•••</button>
+            <div class="secondary">
+              ${hasCut ? `<button class="btn" data-action="toggle-original">${showOrig ? 'Cutout' : 'Original'}</button>` : ''}
+              ${!d._new && (S.side === 'back' ? d.back_path && !S.draftBackUrl : d.photo_path && !S.draftUrl) ? `<button class="btn" data-action="redo-cut">${hasCut ? 'Redo cutout' : 'Make cutout'}</button>` : ''}
+              <button class="btn" data-action="replace-photo" data-side="${S.side}">${src ? 'Replace' : 'Add'} ${S.side === 'back' ? 'back' : 'photo'}</button>
+            </div>
           </div>
         </div>
       </div>
@@ -530,10 +557,10 @@ function renderEditor(morph = false, slide = 0) {
           <label class="check full"><input type="checkbox" id="d-away" data-draft="away" ${d.away ? 'checked' : ''}>Not with me right now</label>
         </div>
         <div class="facts" id="d-facts">${editorFacts(d)}</div>
-        <div style="display:grid;gap:10px">
-          <button class="btn solid block" data-action="save">Save</button>
-          ${d._new ? '' : `<div class="row"><button class="btn grow" data-action="wear-one">Wore it today</button>
-            <button class="btn danger grow" data-action="delete">Delete</button></div>`}
+        ${d._new ? '' : '<button class="textbtn deletelink" data-action="delete">Delete this piece</button>'}
+        <div class="actionbar">
+          <button class="btn solid" data-action="save">Save</button>
+          ${d._new ? '' : '<button class="btn" data-action="wear-one">Wore it today</button>'}
         </div>
       </div>
     </div>`);
@@ -967,6 +994,14 @@ function fittingView() {
       <div id="buy-result"></div>
     </section>
 
+    <h2 class="section">Appearance</h2>
+    <section class="panel">
+      <div class="seg" role="group" aria-label="Appearance" style="max-width:420px">
+        ${[['', 'System'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) =>
+          `<button type="button" data-action="theme-set" data-theme="${v}" aria-pressed="${(document.documentElement.dataset.theme || '') === v}">${l}</button>`).join('')}
+      </div>
+    </section>
+
     <h2 class="section">House</h2>
     <section class="panel">
       <div class="specs">
@@ -1168,6 +1203,24 @@ document.addEventListener('click', async e => {
   if (a === 'scrim') { if (e.target === el) closeSheet(); return; }
   switch (a) {
     case 'go': go(el.dataset.view); break;
+    case 'filters': {
+      const f = S.filter;
+      const opt = (key, v, l) => `<button class="opt" data-action="pick-filter" data-key="${key}" data-val="${v}" aria-pressed="${f[key] === v}">${l}</button>`;
+      sheet(`<div class="grabber" aria-hidden="true"></div>
+        <div class="sheetbar"><span class="label">Sort &amp; filter</span><button class="textbtn" data-action="close">Done</button></div>
+        <div class="optgroup"><span class="label">Fate</span>${opt('fate', '', 'Any fate')}${Object.keys(FATES).map(k => opt('fate', k, FATE_NAMES[k])).join('')}</div>
+        <div class="optgroup"><span class="label">Sort</span>${[['no', 'Archive order'], ['newest', 'Newest'], ['least', 'Least worn'], ['most', 'Most worn']].map(([k, l]) => opt('sort', k, l)).join('')}</div>`, 'bottom');
+      break;
+    }
+    case 'pick-filter': S.filter[el.dataset.key] = el.dataset.val; closeSheet(); transition(render); break;
+    case 'more-tools': el.closest('.mediabar')?.classList.toggle('open'); el.setAttribute('aria-expanded', el.closest('.mediabar')?.classList.contains('open')); break;
+    case 'dismiss-tip': try { localStorage.setItem('installTip', 'done'); } catch {} el.closest('.installtip')?.remove(); break;
+    case 'theme-set': {
+      const r = document.documentElement, v = el.dataset.theme;
+      if (v) r.dataset.theme = v; else delete r.dataset.theme;
+      try { v ? localStorage.setItem('theme', v) : localStorage.removeItem('theme'); } catch {}
+      transition(render); break;
+    }
     case 'theme': {
       const r = document.documentElement;
       r.dataset.theme = themeLabel() === 'Light' ? 'light' : 'dark';
@@ -1370,6 +1423,12 @@ document.addEventListener('keydown', e => {
 let drag = null;
 document.addEventListener('pointerdown', e => {
   if (e.button > 0) return;
+  const handle = e.target.closest('.grabber, .sheetbar');
+  if (handle && !e.target.closest('button')) {
+    const sh = handle.closest('.sheet');
+    if (sh && sh.scrollTop <= 0) { drag = { el: sh, kind: 'sheet', x0: e.clientX, y0: e.clientY, dx: 0, dy: 0, active: false, pid: e.pointerId }; }
+    return;
+  }
   const card = e.target.closest('#sorter .frame');
   const photoEl = !card && e.target.closest('.product .media .frame');
   if (!card && !photoEl) return;
@@ -1378,6 +1437,12 @@ document.addEventListener('pointerdown', e => {
 document.addEventListener('pointermove', e => {
   if (!drag || e.pointerId !== drag.pid) return;
   const dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
+  if (drag.kind === 'sheet') {
+    if (!drag.active) { if (dy > 8 && dy > Math.abs(dx)) { drag.active = true; try { drag.el.setPointerCapture(e.pointerId); } catch {} drag.el.classList.add('dragging'); } else return; }
+    drag.dy = Math.max(0, dy);
+    drag.el.style.transform = `translateY(${drag.dy}px)`;
+    return;
+  }
   if (!drag.active) {
     if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.2) {
       drag.active = true;
@@ -1399,6 +1464,18 @@ function endDrag(cancel) {
   const d = drag; drag = null;
   if (!d.active) return;
   d.el.classList.remove('dragging');
+  if (d.kind === 'sheet') {
+    if (!cancel && d.dy > 110) {
+      d.el.style.transition = 'transform 220ms var(--ease)'; d.el.style.transform = 'translateY(100%)';
+      setTimeout(async () => {
+        if (isDirty() && S.draft && !S.draft._new) await saveDraft(true); else closeSheet(false);
+      }, 200);
+    } else {
+      d.el.style.transition = 'transform 240ms var(--ease)'; d.el.style.transform = '';
+      setTimeout(() => { d.el.style.transition = ''; }, 260);
+    }
+    return;
+  }
   const go = !cancel && Math.abs(d.dx) > 90;
   if (d.kind === 'sort' && go) {
     const fate = d.dx > 0 ? 'carry' : 'toss';
@@ -1419,6 +1496,15 @@ document.addEventListener('pointerup', () => endDrag(false));
 document.addEventListener('pointercancel', () => endDrag(true));
 // Suppress the click that follows a drag, so a swipe never opens or toggles anything.
 document.addEventListener('click', e => { if (e.target.closest('.dragging')) { e.stopPropagation(); e.preventDefault(); } }, true);
+
+// ------------------------------------------------------------------ phone header: hide on scroll down
+let lastY = 0;
+addEventListener('scroll', () => {
+  const y = scrollY;
+  if (Math.abs(y - lastY) < 8) return;
+  document.body.classList.toggle('hide-mast', y > lastY && y > 90);
+  lastY = y;
+}, { passive: true });
 
 // ------------------------------------------------------------------ keep devices in sync
 let lastSync = Date.now(), syncing = false;

@@ -451,3 +451,112 @@ img.fade.in { opacity: 1; filter: none; }
 .lp-act { display: flex; gap: 16px; }
 .lookactions .span2 { grid-column: 1 / -1; }
 @media (min-width: 900px) { .lookpieces { max-width: 1100px; } .lookactions .span2 { grid-column: auto; } .lookactions { grid-template-columns: repeat(3, 1fr); max-width: 760px; } }
+
+/* =====================================================================
+   Phone redesign. Everything below the desktop breakpoint; desktop is unchanged.
+   ===================================================================== */
+.iconbtn { display: inline-grid; place-items: center; width: 44px; height: 44px; border: 0; background: none; color: var(--fg); padding: 0; position: relative; }
+.iconbtn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.iconbtn .dot { position: absolute; top: 9px; right: 9px; width: 6px; height: 6px; border-radius: 50%; background: var(--fg); }
+.addicon, .filterbtn, .grabber, .tab svg { display: none; }
+.product .mediabar .more { display: none; }
+.product .mediabar .secondary { display: contents; }
+.actionbar { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.actionbar .btn:only-child { grid-column: 1 / -1; }
+.deletelink { justify-self: start; color: var(--toss); }
+.installtip { display: none; }
+.opt { display: flex; width: 100%; justify-content: space-between; align-items: center; min-height: 50px; border: 0; border-bottom: 1px solid var(--line);
+  background: none; font-size: 16px; text-align: left; padding: 0; }
+.opt[aria-pressed="true"]::after { content: ''; width: 14px; height: 8px; border-left: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg) translateY(-3px); }
+.optgroup { display: grid; padding: 10px var(--gutter) 18px; }
+.optgroup .label { padding: 10px 0 4px; }
+@media (min-width: 900px) { .scrim.bottom { align-items: center; justify-content: center; } .sheet.bottom { max-width: 440px; height: auto; } }
+
+@media (max-width: 899px) {
+  :root { --nav-h: 56px; }
+
+  /* Slim header that tucks away while you scroll down. */
+  .mast { padding: max(10px, env(safe-area-inset-top, 0px)) var(--gutter) 10px; transition: transform 300ms var(--ease); border-bottom-color: transparent; }
+  body.hide-mast .mast { transform: translateY(calc(-100% - env(safe-area-inset-top, 0px))); }
+  .wordmark { font-size: 15px; letter-spacing: .32em; }
+  .mast .themebtn { display: none; }
+  .mast .right { gap: 0; margin-right: -12px; }
+  .addicon { display: inline-grid; }
+
+  /* iOS-style tab bar: icon over label on frosted glass. */
+  nav.tabbar { background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: saturate(1.4) blur(18px); -webkit-backdrop-filter: saturate(1.4) blur(18px);
+    padding: 0 0 env(safe-area-inset-bottom, 0px); border-top-color: color-mix(in srgb, var(--line) 70%, transparent); }
+  .tab { display: grid; justify-items: center; align-content: center; gap: 3px; height: var(--nav-h); border: 0; background: none; color: var(--muted);
+    font-size: 10px; font-weight: 500; letter-spacing: .1em; text-transform: uppercase; -webkit-tap-highlight-color: transparent; }
+  .tab svg { display: block; width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; transition: transform 200ms var(--ease); }
+  .tab[aria-current="page"] { color: var(--fg); }
+  .tab span { line-height: 1; }
+  .tab[aria-current="page"] svg { stroke-width: 1.9; }
+  .tab:active svg { transform: scale(.88); }
+
+  /* Archive: clothes on the first screen. */
+  .pagehead { padding: 14px 0 10px; }
+  .pagehead .label { display: none; }
+  .page-title { font-size: 30px; }
+  .palette { margin: 0 0 12px; height: 6px; }
+  .tabs.scroll { margin-bottom: 8px; gap: 18px; }
+  .toolbar .row.spread { flex-wrap: nowrap; gap: 4px; margin-bottom: 14px !important; }
+  .toolbar .search { flex: 1; min-height: 40px; }
+  .toolbar .selects { display: none; }
+  .filterbtn { display: inline-grid; flex: none; margin-right: -10px; }
+  .grid { margin-inline: calc(-1 * var(--gutter)); gap: 24px 2px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid .caption { padding: 0 12px; font-size: 12px; }
+  .grid .frame .fate-tag { top: 8px; left: 8px; font-size: 9px; }
+  .piece .frame, .board .cell { transition: transform 140ms var(--ease); }
+  .piece:active .frame, .board .cell:active { transform: scale(.975); }
+
+  /* Sheets slide up from the bottom with a handle you can drag down. */
+  .scrim { align-items: flex-end; }
+  .sheet { height: calc(100dvh - max(14px, env(safe-area-inset-top, 0px))); max-height: none; border-radius: 14px 14px 0 0; }
+  .sheet.bottom { height: auto; max-height: 80dvh; padding-bottom: max(16px, env(safe-area-inset-bottom, 0px)); }
+  .sheet.dragging { transition: none; }
+  .grabber { display: block; width: 38px; height: 5px; border-radius: 3px; background: var(--line); margin: 8px auto 0; position: sticky; top: 8px; z-index: 4; }
+  .sheetbar { padding-top: 6px; border-bottom: 0; touch-action: none; }
+  .grabber + .sheetbar { top: 0; }
+
+  /* Piece page: tools tucked away, Save always in reach. */
+  .product .media .frame { aspect-ratio: 1 / 1; }
+  .product .mediabar { padding: 10px var(--gutter); gap: 8px; flex-wrap: wrap; }
+  .product .mediabar .sides { width: 140px; }
+  .product .mediabar .tools { gap: 6px; }
+  .product .mediabar .tools .btn { min-height: 40px; padding: 0 12px; font-size: 11px; }
+  .product .mediabar .more { display: inline-flex; letter-spacing: .1em; }
+  .product .mediabar .secondary { display: none; }
+  .product .mediabar.open .secondary { display: flex; flex-wrap: wrap; gap: 6px; flex-basis: 100%; }
+  .product .info { padding: 20px var(--gutter) 0; gap: 22px; }
+  .product .title { font-size: 30px; }
+  .specs { gap: 14px 18px; }
+  .actionbar { position: sticky; bottom: 0; z-index: 5; margin: 6px calc(-1 * var(--gutter)) 0; padding: 12px var(--gutter) max(12px, env(safe-area-inset-bottom, 0px));
+    background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-top: 1px solid var(--line); }
+  .deletelink { margin-top: -6px; }
+
+  /* Look and Travel: tighter heroes, one scrolling row of styles, full-bleed board. */
+  .hero-title { font-size: 46px; }
+  .lookhead, .travelhead { padding: 18px 0 14px; gap: 10px; }
+  .lookhead .temp { font-size: 30px; }
+  .controls { margin-bottom: 18px; }
+  .controls .row:last-child { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; gap: 18px; margin-inline: calc(-1 * var(--gutter)); padding-inline: var(--gutter); }
+  .controls .row:last-child::-webkit-scrollbar { display: none; }
+  .controls .row:last-child .textbtn { white-space: nowrap; }
+  .board { margin-inline: calc(-1 * var(--gutter)); max-width: none; }
+  .lookpieces { margin-top: 8px; }
+  .lp { grid-template-columns: 78px minmax(0, 1fr) auto; }
+  .lp .label { font-size: 10px; }
+  .lookactions { margin-top: 20px; }
+  .bag { margin-top: 18px; }
+  .bag .bar { height: 44px; }
+  .stat .n { font-size: 32px; }
+  #sorter .frame { margin-inline: calc(-1 * var(--gutter)); aspect-ratio: 1 / 1; }
+
+  /* Home Screen tip, once. */
+  .installtip { display: flex; position: fixed; left: 10px; right: 10px; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + 10px); z-index: 12;
+    gap: 14px; align-items: center; justify-content: space-between; padding: 12px 16px; background: var(--fg); color: var(--bg); font-size: 13px; }
+  .installtip .textbtn { color: var(--bg); padding: 4px 0; min-height: 36px; white-space: nowrap; flex: none; }
+  .installtip span { min-width: 0; line-height: 1.35; }
+  #toast { bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + 14px); }
+}
