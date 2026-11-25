@@ -1,9 +1,9 @@
 import {
   CATEGORIES, FATES, STYLES, SEASONS, REFERENCES, MODE_LABELS, itemWeight, shipPlan, marginalYenPerKg,
   measureCm, fitEstimate, similarTo, colourFamily, suggestOutfit, outfitTip, parseDecisions, claudeSummary,
-} from './logic.js?v=202611252003';
-import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611252003';
-import { cutout, finish as finishCutout, preload as preloadCutouts } from './bg.js?v=202611252003';
+} from './logic.js?v=202611252019';
+import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611252019';
+import { cutout, finish as finishCutout, preload as preloadCutouts } from './bg.js?v=202611252019';
 
 // ------------------------------------------------------------------ state
 const DEFAULT_SETTINGS = { boxTareKg: 1, carryLimitKg: 30, house: 'Max Luo', departure: '2026-12-17' };
@@ -366,6 +366,7 @@ function renderEditor(morph = false) {
           </div>
           <div class="tools">
             ${hasCut ? `<button class="btn" data-action="toggle-original">${showOrig ? 'Cutout' : 'Original'}</button>` : ''}
+            ${!d._new && (S.side === 'back' ? d.back_path && !S.draftBackUrl : d.photo_path && !S.draftUrl) ? `<button class="btn" data-action="redo-cut">${hasCut ? 'Redo cutout' : 'Make cutout'}</button>` : ''}
             ${src ? '<button class="btn" data-action="measure">Measure</button>' : ''}
             <button class="btn" data-action="replace-photo" data-side="${S.side}">${src ? 'Replace' : 'Add'} ${S.side === 'back' ? 'back' : 'photo'}</button>
           </div>
@@ -1011,6 +1012,26 @@ document.addEventListener('click', async e => {
     case 'clean': { try { localStorage.setItem('clean', el.checked ? '1' : '0'); } catch {} if (el.checked) preloadCutouts(); break; }
     case 'toggle-original': { S.showOriginal = !S.showOriginal; const y = $('.sheet').scrollTop; renderEditor(); $('.sheet').scrollTop = y; break; }
     case 'clean-all': await cleanAll(); break;
+    case 'redo-cut': {
+      const d = S.draft, back = S.side === 'back';
+      const it = byId(d.id); if (!it) break;
+      el.disabled = true; el.textContent = 'Working…';
+      toast(back ? 'Redoing the back cutout' : 'Redoing the cutout');
+      const path = await makeCutout(it.id, await S.store.getBlob(back ? it.back_path : it.photo_path), back ? 'backcut' : 'cut', 'No. ' + pad(it.no));
+      if (path) {
+        const row = { ...it, [back ? 'back_cut_path' : 'cut_path']: path };
+        await guard(async () => {
+          await S.store.updateMany([row]);
+          S.items[S.items.findIndex(i => i.id === row.id)] = row;
+          S.draft[back ? 'back_cut_path' : 'cut_path'] = path;
+          await refreshUrls([row]);
+        });
+        toast('Cutout redone');
+      }
+      S.showOriginal = false;
+      if (S.draft) { const y = $('.sheet').scrollTop; renderEditor(); $('.sheet').scrollTop = y; }
+      break;
+    }
     case 'pairs': {
       try { localStorage.setItem('pairs', el.checked ? '1' : '0'); } catch {}
       break;

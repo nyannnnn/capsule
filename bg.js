@@ -26,6 +26,7 @@ export async function finish(png, maxEdge = 900) {
   const g = c.getContext('2d', { willReadFrequently: true });
   g.drawImage(bmp, 0, 0);
   const img = g.getImageData(0, 0, c.width, c.height);
+  hardenEdges(img);
   keepMainObject(img);
   g.putImageData(img, 0, 0);
 
@@ -45,6 +46,18 @@ export async function finish(png, maxEdge = 900) {
   o.shadowOffsetY = Math.round(Math.max(gw, gh) * 0.018);
   o.drawImage(c, x0, y0, w, h, pad, pad, gw, gh);
   return new Promise(res => out.toBlob(res, 'image/jpeg', 0.86));
+}
+
+// The model leaves pixels it is unsure about semi-transparent, which reads as a sleeve fading out
+// against a textured rug. Pixels it is mostly sure about become solid; faint ones drop out.
+function hardenEdges({ data }) {
+  const lo = 46, hi = 140; // roughly 18% and 55% confidence
+  for (let i = 3; i < data.length; i += 4) {
+    const a = data[i];
+    if (a <= lo) data[i] = 0;
+    else if (a >= hi) data[i] = 255;
+    else { const t = (a - lo) / (hi - lo); data[i] = Math.round(255 * t * t * (3 - 2 * t)); }
+  }
 }
 
 // Keep the garment and drop small separate objects, such as a reference card lying beside it.
