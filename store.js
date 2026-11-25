@@ -4,8 +4,9 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
 export const cloudEnabled = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
 const BUCKET = 'closet';
+const SUFFIX = { full: '', thumb: '_t', back: '_b', backthumb: '_bt' };
 const ITEM_FIELDS = ['no', 'name', 'category', 'colour', 'brand', 'size', 'styles', 'seasons', 'fit',
-  'condition', 'length_cm', 'width_cm', 'weight_g', 'fate', 'away', 'notes', 'photo_path', 'thumb_path',
+  'condition', 'length_cm', 'width_cm', 'weight_g', 'fate', 'away', 'notes', 'photo_path', 'thumb_path', 'back_path', 'back_thumb_path',
   'wear_count', 'last_worn'];
 
 function pick(item) {
@@ -61,7 +62,7 @@ class LocalStore {
   }
   async deleteItem(item) {
     await tx(this.db, 'items', 'readwrite', s => s.delete(item.id));
-    await tx(this.db, 'blobs', 'readwrite', s => { if (item.photo_path) s.delete(item.photo_path); if (item.thumb_path) s.delete(item.thumb_path); });
+    await tx(this.db, 'blobs', 'readwrite', s => { for (const k of ['photo_path', 'thumb_path', 'back_path', 'back_thumb_path']) if (item[k]) s.delete(item[k]); });
   }
   async uploadPhoto(path, blob) { await tx(this.db, 'blobs', 'readwrite', s => s.put(blob, path)); return path; }
   async photoUrls(paths) {
@@ -81,7 +82,7 @@ class LocalStore {
   async saveProfile(data) { await tx(this.db, 'kv', 'readwrite', s => s.put(data, 'profile')); }
   async listWears() { return (await tx(this.db, 'wears', 'readonly', s => s.getAll())) || []; }
   async addWear(w) { const row = { id: uuid(), ...w }; await tx(this.db, 'wears', 'readwrite', s => s.put(row)); return row; }
-  photoPath(id, kind) { return `local/${id}${kind === 'thumb' ? '_t' : ''}.jpg`; }
+  photoPath(id, kind) { return `local/${id}${SUFFIX[kind] || ''}.jpg`; }
 }
 
 // ---------------------------------------------------------------- cloud
@@ -114,7 +115,7 @@ class CloudStore {
     this.check(await this.sb.from('items').upsert(rows.map(r => ({ id: r.id, ...pick(r) }))));
   }
   async deleteItem(item) {
-    const paths = [item.photo_path, item.thumb_path].filter(Boolean);
+    const paths = [item.photo_path, item.thumb_path, item.back_path, item.back_thumb_path].filter(Boolean);
     if (paths.length) await this.sb.storage.from(BUCKET).remove(paths);
     this.check(await this.sb.from('items').delete().eq('id', item.id));
   }
@@ -148,7 +149,7 @@ class CloudStore {
   }
   async listWears() { return this.check(await this.sb.from('wears').select('*').order('worn_on', { ascending: false })); }
   async addWear(w) { return this.check(await this.sb.from('wears').insert(w).select().single()); }
-  photoPath(id, kind) { return `${this.user.id}/${id}${kind === 'thumb' ? '_t' : ''}.jpg`; }
+  photoPath(id, kind) { return `${this.user.id}/${id}${SUFFIX[kind] || ''}.jpg`; }
 }
 
 export function createStore() { return cloudEnabled ? new CloudStore() : new LocalStore(); }

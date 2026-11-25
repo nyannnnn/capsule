@@ -37,6 +37,10 @@ const nextNo = () => S.items.reduce((m, i) => Math.max(m, i.no || 0), 0) + 1;
 const byId = id => S.items.find(i => i.id === id);
 const thumb = it => S.urls[it.thumb_path] || S.urls[it.photo_path] || '';
 const full = it => S.urls[it.photo_path] || S.urls[it.thumb_path] || '';
+const backThumb = it => S.urls[it.back_thumb_path] || S.urls[it.back_path] || '';
+const backFull = it => S.urls[it.back_path] || S.urls[it.back_thumb_path] || '';
+const PHOTO_KEYS = { photo_path: 'full', thumb_path: 'thumb', back_path: 'back', back_thumb_path: 'backthumb' };
+const pairMode = () => { try { return localStorage.getItem('pairs') === '1'; } catch { return false; } };
 const slotOf = it => (CATEGORIES[it.category] || CATEGORIES.other).slot;
 
 let toastTimer;
@@ -88,7 +92,7 @@ function ask(message, okLabel = 'Confirm', danger = false) {
 }
 
 async function refreshUrls(items = S.items) {
-  const paths = items.flatMap(i => [i.thumb_path, i.photo_path]).filter(Boolean);
+  const paths = items.flatMap(i => [i.thumb_path, i.photo_path, i.back_thumb_path, i.back_path]).filter(Boolean);
   Object.assign(S.urls, await S.store.photoUrls(paths));
 }
 async function loadAll() {
@@ -180,7 +184,7 @@ function filtered() {
 function pieceHtml(it) {
   const fate = it.fate || 'undecided';
   return `<button class="piece" data-action="open" data-id="${it.id}" data-away="${!!it.away}">
-    <div class="frame">${photo(it)}${fate !== 'undecided' ? `<span class="fate-tag ${fate}">${FATE_NAMES[fate]}</span>` : ''}</div>
+    <div class="frame">${photo(it)}${backThumb(it) ? `<img class="back" src="${esc(backThumb(it))}" alt="" loading="lazy">` : ''}${fate !== 'undecided' ? `<span class="fate-tag ${fate}">${FATE_NAMES[fate]}</span>` : ''}</div>
     <div class="caption">
       <span class="name">${esc(it.name || catLabel(it.category))}</span><span class="no">No. ${pad(it.no)}</span>
       <span class="sub">${esc([it.brand, it.colour, it.size && 'Size ' + it.size].filter(Boolean).join(' · ') || 'Add details')}</span>
@@ -225,32 +229,43 @@ async function addFiles(files) {
   files = [...files].filter(f => f.type.startsWith('image/'));
   if (!files.length) return;
   const base = { name: '', category: 'other', fate: 'undecided', styles: [], seasons: [], wear_count: 0 };
-  if (files.length === 1) {
-    const blobs = await compressPhoto(files[0]);
-    openEditor({ ...base, id: uuid(), no: nextNo(), _new: true }, blobs);
+  // In pair mode, photos are shot front then back for each piece: order by capture time, then name.
+  const groups = pairMode() && files.length > 1
+    ? (() => { const f = files.slice().sort((a, b) => a.lastModified - b.lastModified || a.name.localeCompare(b.name));
+        const g = []; for (let i = 0; i < f.length; i += 2) g.push(f.slice(i, i + 2)); return g; })()
+    : files.map(f => [f]);
+  if (groups.length === 1) {
+    const [front, back] = groups[0];
+    openEditor({ ...base, id: uuid(), no: nextNo(), _new: true }, await compressPhoto(front), back ? await compressPhoto(back) : null);
     return;
   }
   let done = 0;
-  for (const file of files) {
-    toast(`Adding ${++done} of ${files.length}`);
+  for (const [front, back] of groups) {
+    toast(`Adding ${++done} of ${groups.length}`);
     await guard(async () => {
-      const { full: f, thumb: t } = await compressPhoto(file);
-      const id = uuid();
-      const photo_path = await S.store.uploadPhoto(S.store.photoPath(id, 'full'), f);
-      const thumb_path = await S.store.uploadPhoto(S.store.photoPath(id, 'thumb'), t);
-      S.items.push(await S.store.saveItem({ ...base, id, no: nextNo(), photo_path, thumb_path }));
+      const id = uuid(), row = { ...base, id, no: nextNo() };
+      const f = await compressPhoto(front);
+      row.photo_path = await S.store.uploadPhoto(S.store.photoPath(id, 'full'), f.full);
+      row.thumb_path = await S.store.uploadPhoto(S.store.photoPath(id, 'thumb'), f.thumb);
+      if (back) {
+        const b = await compressPhoto(back);
+        row.back_path = await S.store.uploadPhoto(S.store.photoPath(id, 'back'), b.full);
+        row.back_thumb_path = await S.store.uploadPhoto(S.store.photoPath(id, 'backthumb'), b.thumb);
+      }
+      S.items.push(await S.store.saveItem(row));
     }, 'Couldn’t add a photo');
   }
   await refreshUrls();
-  toast(`Added ${files.length} pieces`);
+  toast(`Added ${plural(groups.length, 'piece')}`);
   render();
 }
 
 // ------------------------------------------------------------------ product page (item editor)
-function openEditor(item, blobs = null, fromEl = null) {
+function openEditor(item, blobs = null, backBlobs = null, fromEl = null) {
   S.draft = { ...item, styles: [...(item.styles || [])], seasons: [...(item.seasons || [])] };
-  S.draftBlobs = blobs;
+  S.draftBlobs = blobs; S.draftBack = backBlobs; S.side = 'front';
   if (blobs) S.draftUrl = URL.createObjectURL(blobs.full);
+  if (backBlobs) S.draftBackUrl = URL.createObjectURL(backBlobs.full);
   const img = fromEl?.querySelector('img');
   if (img && document.startViewTransition && !reduced()) {
     img.style.viewTransitionName = 'piece';
@@ -263,7 +278,8 @@ function closeSheet(animate = true) {
   const finish = () => {
     root.innerHTML = '';
     if (S.draftUrl) { URL.revokeObjectURL(S.draftUrl); S.draftUrl = null; }
-    S.draft = null; S.draftBlobs = null; S.decisions = null;
+    if (S.draftBackUrl) { URL.revokeObjectURL(S.draftBackUrl); S.draftBackUrl = null; }
+    S.draft = null; S.draftBlobs = null; S.draftBack = null; S.decisions = null;
     document.body.style.overflow = '';
   };
   const scrim = root.querySelector('.scrim');
@@ -302,7 +318,8 @@ function refreshEditorBits() {
 
 function renderEditor(morph = false) {
   const d = S.draft;
-  const src = S.draftUrl || full(d);
+  const front = S.draftUrl || full(d), back = S.draftBackUrl || backFull(d);
+  const src = S.side === 'back' ? back : front;
   const chips = (list, key) => `<div class="row" style="gap:18px">${list.map(v =>
     `<button type="button" class="textbtn" data-action="toggle-chip" data-key="${key}" data-val="${v}" aria-pressed="${d[key].includes(v)}">${v}</button>`).join('')}</div>`;
   const slot = CATEGORIES[d.category]?.slot;
@@ -313,10 +330,15 @@ function renderEditor(morph = false) {
     <div class="sheetbar"><span class="label">No. ${pad(d.no)}</span><button class="textbtn" data-action="close">Close</button></div>
     <div class="product">
       <div class="media">
-        <div class="frame contain">${src ? `<img class="fade in" src="${esc(src)}" alt="Photo of No. ${d.no}" ${morph ? 'style="view-transition-name:piece"' : ''}>` : '<span class="none">No photo yet</span>'}</div>
+        <div class="frame contain">${src ? `<img class="fade in ${S.flipping ? 'flip' : ''}" src="${esc(src)}" alt="${S.side === 'back' ? 'Back' : 'Front'} of No. ${d.no}" ${morph ? 'style="view-transition-name:piece"' : ''}>`
+          : `<span class="none">${S.side === 'back' ? 'No back photo yet' : 'No photo yet'}</span>`}</div>
+        <div class="sides seg" role="group" aria-label="Side">
+          <button type="button" data-action="side" data-side="front" aria-pressed="${S.side !== 'back'}">Front</button>
+          <button type="button" data-action="side" data-side="back" aria-pressed="${S.side === 'back'}">Back</button>
+        </div>
         <div class="tools">
           ${src ? '<button class="btn" data-action="measure">Measure</button>' : ''}
-          <button class="btn" data-action="replace-photo">${src ? 'Replace photo' : 'Add photo'}</button>
+          <button class="btn" data-action="replace-photo" data-side="${S.side}">${src ? 'Replace' : 'Add'} ${S.side === 'back' ? 'back' : 'photo'}</button>
         </div>
       </div>
       <div class="info">
@@ -362,6 +384,10 @@ async function saveDraft() {
       d.photo_path = await S.store.uploadPhoto(S.store.photoPath(d.id, 'full'), S.draftBlobs.full);
       d.thumb_path = await S.store.uploadPhoto(S.store.photoPath(d.id, 'thumb'), S.draftBlobs.thumb);
     }
+    if (S.draftBack) {
+      d.back_path = await S.store.uploadPhoto(S.store.photoPath(d.id, 'back'), S.draftBack.full);
+      d.back_thumb_path = await S.store.uploadPhoto(S.store.photoPath(d.id, 'backthumb'), S.draftBack.thumb);
+    }
     for (const k of ['length_cm', 'width_cm', 'weight_g']) d[k] = d[k] === '' || d[k] == null ? null : Number(d[k]);
     const saved = await S.store.saveItem(d);
     const idx = S.items.findIndex(i => i.id === saved.id);
@@ -373,7 +399,7 @@ async function saveDraft() {
 
 // ------------------------------------------------------------------ measure overlay
 function openMeasure() {
-  const src = S.draftUrl || full(S.draft);
+  const src = S.side === 'back' ? (S.draftBackUrl || backFull(S.draft)) : (S.draftUrl || full(S.draft));
   const root = document.createElement('div');
   root.className = 'measure';
   root.innerHTML = `
@@ -803,7 +829,7 @@ async function backup() {
     const items = [];
     for (const it of S.items) {
       const row = { ...it };
-      for (const k of ['photo_path', 'thumb_path']) {
+      for (const k of Object.keys(PHOTO_KEYS)) {
         if (it[k]) { try { row[k + '_data'] = await blobToDataUrl(await S.store.getBlob(it[k])); } catch {} }
       }
       items.push(row);
@@ -824,9 +850,9 @@ async function restore(file) {
       toast(`Restoring ${++n} of ${data.items.length}`);
       const id = uuid(); idMap[old.id] = id;
       const row = { ...old, id };
-      for (const k of ['photo_path', 'thumb_path']) {
+      for (const [k, kind] of Object.entries(PHOTO_KEYS)) {
         row[k] = old[k + '_data']
-          ? await S.store.uploadPhoto(S.store.photoPath(id, k === 'thumb_path' ? 'thumb' : 'full'), await dataUrlToBlob(old[k + '_data']))
+          ? await S.store.uploadPhoto(S.store.photoPath(id, kind), await dataUrlToBlob(old[k + '_data']))
           : null;
         delete row[k + '_data'];
       }
@@ -857,6 +883,8 @@ document.addEventListener('click', async e => {
         <div style="padding:40px var(--gutter);display:grid;gap:18px;max-width:560px">
           <h2 class="display page-title">New to the archive</h2>
           <p class="muted">Lay the piece flat with a credit card beside it and shoot from straight above. The card lets you measure it later.</p>
+          <label class="check"><input type="checkbox" id="pairs" data-action="pairs" ${pairMode() ? 'checked' : ''}>My photos come in pairs: front, then back</label>
+          <p class="hint" style="margin-top:-10px">Shoot each piece front then back, then choose all the photos at once. They’re paired in the order they were taken.</p>
           <button class="btn solid block" data-action="pick">Choose photos</button>
           <button class="btn block" data-action="camera">Take a photo</button></div>`); break;
     case 'camera': closeSheet(false); $('#camera').click(); break;
@@ -864,7 +892,7 @@ document.addEventListener('click', async e => {
     case 'slot': S.filter.slot = el.dataset.slot; transition(render); break;
     case 'open': {
       const it = byId(el.dataset.id);
-      if (it) { await refreshUrls([it]); openEditor(it, null, el.classList.contains('piece') ? el : null); }
+      if (it) { await refreshUrls([it]); openEditor(it, null, null, el.classList.contains('piece') ? el : null); }
       break;
     }
     case 'close': closeSheet(); break;
@@ -877,14 +905,30 @@ document.addEventListener('click', async e => {
       el.parentElement.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', b === el)); refreshEditorBits(); break;
     case 'measure': openMeasure(); break;
     case 'replace-photo': {
+      const side = el.dataset.side;
       const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
       inp.onchange = async () => {
         if (!inp.files[0]) return;
-        S.draftBlobs = await compressPhoto(inp.files[0]);
-        if (S.draftUrl) URL.revokeObjectURL(S.draftUrl);
-        S.draftUrl = URL.createObjectURL(S.draftBlobs.full); renderEditor();
+        const blobs = await compressPhoto(inp.files[0]);
+        if (side === 'back') {
+          S.draftBack = blobs; if (S.draftBackUrl) URL.revokeObjectURL(S.draftBackUrl);
+          S.draftBackUrl = URL.createObjectURL(blobs.full);
+        } else {
+          S.draftBlobs = blobs; if (S.draftUrl) URL.revokeObjectURL(S.draftUrl);
+          S.draftUrl = URL.createObjectURL(blobs.full);
+        }
+        renderEditor();
       };
       inp.click(); break;
+    }
+    case 'side': {
+      if (S.side === el.dataset.side) break;
+      S.side = el.dataset.side; S.flipping = !reduced();
+      const y = $('.sheet').scrollTop; renderEditor(); $('.sheet').scrollTop = y; S.flipping = false; break;
+    }
+    case 'pairs': {
+      try { localStorage.setItem('pairs', el.checked ? '1' : '0'); } catch {}
+      break;
     }
     case 'save': await saveDraft(); break;
     case 'delete':

@@ -14,7 +14,8 @@ I was moving countries with one checked bag and a closet that didn't fit in it. 
 
 | | |
 |---|---|
-| **Archive** | Every piece gets a photo, a number (No. 001, No. 002…), brand, size, colour, style and season tags. Filter by type, search by anything, sort by most or least worn. |
+| **Archive** | Every piece gets front and back photos, a number (No. 001, No. 002…), brand, size, colour, style and season tags. Hover a piece to see its back. Filter by type, search by anything, sort by most or least worn. |
+| **Batch add** | Shoot each piece front then back, select every photo at once, and they're paired by capture time. |
 | **Measure from a photo** | Lay the piece flat beside a credit card, tap the card's two ends, then the garment's length and width. The card's known 85.6 mm edge sets the scale. |
 | **Fit check** | Compares flat garment width against your body measurements and calls the fit: slim, regular, relaxed, oversized. |
 | **Look** | Picks a top, bottom, shoes and, when it's cold, an outer layer, using the day's temperature, your chosen style and what you haven't worn lately. Keep the pieces you like, swap the rest, then log the look. |

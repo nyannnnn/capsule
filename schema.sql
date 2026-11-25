@@ -22,6 +22,8 @@ create table if not exists public.items (
   notes       text,
   photo_path  text,
   thumb_path  text,
+  back_path   text,
+  back_thumb_path text,
   wear_count  int default 0,
   last_worn   date,
   created_at  timestamptz default now()
