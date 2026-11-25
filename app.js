@@ -1,9 +1,9 @@
 import {
   CATEGORIES, FATES, STYLES, SEASONS, REFERENCES, MODE_LABELS, itemWeight, shipPlan, marginalYenPerKg,
   measureCm, fitEstimate, similarTo, colourFamily, suggestOutfit, outfitTip, parseDecisions, claudeSummary,
-} from './logic.js?v=202611251954';
-import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611251954';
-import { cutout, preload as preloadCutouts } from './bg.js?v=202611251954';
+} from './logic.js?v=202611252003';
+import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611252003';
+import { cutout, finish as finishCutout, preload as preloadCutouts } from './bg.js?v=202611252003';
 
 // ------------------------------------------------------------------ state
 const DEFAULT_SETTINGS = { boxTareKg: 1, carryLimitKg: 30, house: 'Max Luo', departure: '2026-12-17' };
@@ -42,7 +42,7 @@ const full = it => S.urls[it.cut_path] || S.urls[it.photo_path] || S.urls[it.thu
 const backThumb = it => S.urls[it.back_cut_path] || S.urls[it.back_thumb_path] || S.urls[it.back_path] || '';
 const backFull = it => S.urls[it.back_cut_path] || S.urls[it.back_path] || S.urls[it.back_thumb_path] || '';
 const original = (it, side) => side === 'back' ? (S.urls[it.back_path] || S.urls[it.back_thumb_path] || '') : (S.urls[it.photo_path] || S.urls[it.thumb_path] || '');
-const cutCls = it => (it && it.cut_path ? 'cut' : '');
+const cutCls = it => (it && S.urls[it.cut_path] ? 'cut' : '');
 const PHOTO_KEYS = { photo_path: 'full', thumb_path: 'thumb', back_path: 'back', back_thumb_path: 'backthumb', cut_path: 'cut', back_cut_path: 'backcut' };
 const cleanMode = () => { try { return localStorage.getItem('clean') !== '0'; } catch { return true; } };
 
@@ -770,7 +770,7 @@ function fittingView() {
       <div class="row">
         <button class="btn" data-action="backup">Download backup</button>
         <button class="btn quiet" data-action="restore">Restore backup</button>
-        ${needsCleanup().length ? `<button class="btn" data-action="clean-all">Remove backgrounds (${needsCleanup().length})</button>` : ''}
+        ${needsCleanup().length ? `<button class="btn" data-action="clean-all">Clean up photos (${needsCleanup().length})</button>` : ''}
         ${S.store.mode === 'cloud' ? '<button class="btn danger" data-action="signout">Sign out</button>' : ''}
       </div>
     </section></div>`;
@@ -901,9 +901,21 @@ async function restore(file) {
 }
 
 // ------------------------------------------------------------------ background cleanup for existing pieces
+const isOldCut = p => /\.png$/.test(p || '');
 function needsCleanup() {
-  return S.items.filter(i => (i.photo_path && !i.cut_path) || (i.back_path && !i.back_cut_path));
+  return S.items.filter(i => (i.photo_path && !i.cut_path) || (i.back_path && !i.back_cut_path) || isOldCut(i.cut_path) || isOldCut(i.back_cut_path));
 }
+
+// Upgrade an older transparent PNG cutout to the light studio JPEG, without rerunning the model.
+async function upgradeCut(it, field, kind) {
+  try {
+    const out = await finishCutout(await S.store.getBlob(it[field]));
+    const path = await S.store.uploadPhoto(S.store.photoPath(it.id, kind, out.type), out);
+    await S.store.removePhoto(it[field]).catch(() => {});
+    return path;
+  } catch (e) { console.warn('upgrade failed', e); return it[field]; }
+}
+
 let cleaning = false;
 async function cleanAll() {
   if (cleaning) return;
@@ -914,19 +926,21 @@ async function cleanAll() {
   try {
     for (const it of todo) {
       n++;
-      const row = { ...it };
-      if (it.photo_path && !it.cut_path) {
-        toast(`Removing backgrounds, ${n} of ${todo.length}`);
-        row.cut_path = await makeCutout(it.id, await S.store.getBlob(it.photo_path), 'cut', 'No. ' + pad(it.no));
-      }
-      if (it.back_path && !it.back_cut_path) {
-        row.back_cut_path = await makeCutout(it.id, await S.store.getBlob(it.back_path), 'backcut', 'No. ' + pad(it.no));
-      }
+      const row = { ...it }, label = 'No. ' + pad(it.no);
+      toast(`Cleaning up photos, ${n} of ${todo.length}`);
+      if (isOldCut(it.cut_path)) row.cut_path = await upgradeCut(it, 'cut_path', 'cut');
+      else if (it.photo_path && !it.cut_path) row.cut_path = await makeCutout(it.id, await S.store.getBlob(it.photo_path), 'cut', label);
+      if (isOldCut(it.back_cut_path)) row.back_cut_path = await upgradeCut(it, 'back_cut_path', 'backcut');
+      else if (it.back_path && !it.back_cut_path) row.back_cut_path = await makeCutout(it.id, await S.store.getBlob(it.back_path), 'backcut', label);
       if (row.cut_path !== it.cut_path || row.back_cut_path !== it.back_cut_path) {
-        await guard(async () => { await S.store.updateMany([row]); S.items[S.items.findIndex(i => i.id === row.id)] = row; ok++; });
+        await guard(async () => {
+          await S.store.updateMany([row]);
+          S.items[S.items.findIndex(i => i.id === row.id)] = row; ok++;
+          await refreshUrls([row]);
+          if (S.view === 'archive' && !$('#sheet-root').innerHTML) render(); // show each piece as it finishes
+        });
       }
     }
-    await refreshUrls();
     toast(`Cleaned up ${plural(ok, 'piece')}`);
     render();
   } finally { cleaning = false; }

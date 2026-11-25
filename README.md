@@ -54,7 +54,7 @@ This assumes the card and garment lie in the same plane and the photo is shot st
 - **Data:** [Supabase](https://supabase.com) Postgres plus Storage, on the free tier. Photos are compressed in the browser to about 200 KB each, so 1 GB holds thousands of pieces.
 - **Privacy:** row level security in [`schema.sql`](schema.sql) locks every row and photo to its owner. Public sign-ups are switched off, and the anon key in `config.js` is designed to be public.
 - **Offline mode:** with `config.js` empty, everything runs from IndexedDB in the browser instead. No account needed to try it.
-- **Background removal:** [@imgly/background-removal](https://github.com/imgly/background-removal-js) (AGPL-3.0), running on-device. The small model downloads once, about 40 MB, then is cached. Cutouts are trimmed to the garment and stored as WebP with transparency.
+- **Background removal:** [@imgly/background-removal](https://github.com/imgly/background-removal-js) (AGPL-3.0), running on-device. The small model downloads once, about 40 MB, then is cached. Cutouts keep only the main object (so a reference card beside the garment drops out), are trimmed, and are saved as roughly 20 KB JPEGs on the studio colour with the shadow baked in.
 - **Weather:** [Open-Meteo](https://open-meteo.com), which needs no API key.
 - **Motion:** view transitions morph a grid photo into its product page. Pieces cascade in, the bag bar fills block by block, and all of it rests under `prefers-reduced-motion`.
 

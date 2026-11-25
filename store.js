@@ -1,5 +1,5 @@
 // Storage: Supabase when config.js has keys, otherwise this device only (IndexedDB).
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=202611251954';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=202611252003';
 
 export const cloudEnabled = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
@@ -66,7 +66,11 @@ class LocalStore {
     await tx(this.db, 'items', 'readwrite', s => s.delete(item.id));
     await tx(this.db, 'blobs', 'readwrite', s => { for (const k of PHOTO_FIELDS) if (item[k]) s.delete(item[k]); });
   }
-  async uploadPhoto(path, blob) { await tx(this.db, 'blobs', 'readwrite', s => s.put(blob, path)); return path; }
+  async uploadPhoto(path, blob) {
+    await tx(this.db, 'blobs', 'readwrite', s => s.put(blob, path));
+    if (this.urls.has(path)) { URL.revokeObjectURL(this.urls.get(path)); this.urls.delete(path); }
+    return path;
+  }
   async photoUrls(paths) {
     const out = {};
     for (const p of paths) {
@@ -80,6 +84,7 @@ class LocalStore {
     return out;
   }
   async getBlob(path) { return tx(this.db, 'blobs', 'readonly', s => s.get(path)); }
+  async removePhoto(path) { await tx(this.db, 'blobs', 'readwrite', s => s.delete(path)); }
   async getProfile() { return (await tx(this.db, 'kv', 'readonly', s => s.get('profile'))) || {}; }
   async saveProfile(data) { await tx(this.db, 'kv', 'readwrite', s => s.put(data, 'profile')); }
   async listWears() { return (await tx(this.db, 'wears', 'readonly', s => s.getAll())) || []; }
@@ -138,6 +143,7 @@ class CloudStore {
     for (const p of paths) if (p && this.urlCache.has(p)) out[p] = this.urlCache.get(p).url;
     return out;
   }
+  async removePhoto(path) { await this.sb.storage.from(BUCKET).remove([path]); this.urlCache.delete(path); }
   async getBlob(path) {
     const data = this.check(await this.sb.storage.from(BUCKET).download(path));
     return data;
