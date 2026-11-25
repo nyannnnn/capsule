@@ -184,7 +184,6 @@ label.field .label, .field > .label { display: block; }
 .frame.contain img { object-fit: contain; }
 .frame img.back { position: absolute; inset: 0; opacity: 0; transition: opacity 600ms var(--ease), transform 900ms var(--ease); }
 @media (hover: hover) { .piece:hover .frame img.back { opacity: 1; } }
-.product .media .sides { position: absolute; left: 12px; top: 12px; width: 180px; background: var(--bg); }
 .frame img.flip { animation: flipIn 520ms var(--ease) both; }
 @keyframes flipIn { from { transform: perspective(1200px) rotateY(-80deg); opacity: 0; } }
 .piece:hover .frame img { transform: scale(1.03); }
@@ -224,9 +223,18 @@ img.fade.in { opacity: 1; filter: none; }
 .product { display: grid; }
 .product .media { background: var(--tile); position: relative; }
 .product .media .frame { aspect-ratio: 4 / 5; }
-.product .media .tools { position: absolute; right: 12px; top: 12px; justify-content: flex-end; display: flex; gap: 8px; flex-wrap: wrap; }
-.product .media .tools .btn { background: var(--bg); border-color: var(--bg); min-height: 40px; padding: 0 16px; }
-.product .media .tools .btn:hover { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+/* Photo controls: a row under the photo on phones, floating over it on wider screens. */
+.product .mediabar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 12px var(--gutter); background: var(--bg); border-bottom: 1px solid var(--line); }
+.product .mediabar .sides { width: 160px; flex: none; }
+.product .mediabar .tools { display: flex; gap: 8px; flex-wrap: wrap; }
+.product .mediabar .tools .btn { min-height: 44px; padding: 0 14px; }
+@media (min-width: 900px) {
+  .product .mediabar { position: absolute; top: 12px; left: 12px; right: 12px; padding: 0; background: none; border: 0; }
+  .product .mediabar .sides, .product .mediabar .tools .btn { background: var(--bg); }
+  .product .mediabar .tools .btn { border-color: var(--bg); }
+  .product .mediabar .tools .btn:hover { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+}
 .product .info { padding: 28px var(--gutter) 40px; display: grid; gap: 26px; align-content: start; }
 .product .title { font-size: clamp(32px, 4vw, 48px); }
 .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; border: 1px solid var(--line); }

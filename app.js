@@ -1,8 +1,8 @@
 import {
   CATEGORIES, FATES, STYLES, SEASONS, REFERENCES, MODE_LABELS, itemWeight, shipPlan, marginalYenPerKg,
   measureCm, fitEstimate, similarTo, colourFamily, suggestOutfit, outfitTip, parseDecisions, claudeSummary,
-} from './logic.js?v=202611251908';
-import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611251908';
+} from './logic.js?v=202611251910';
+import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611251910';
 
 // ------------------------------------------------------------------ state
 const DEFAULT_SETTINGS = { boxTareKg: 1, carryLimitKg: 30, house: 'Max Luo', departure: '2026-12-17' };
@@ -332,13 +332,15 @@ function renderEditor(morph = false) {
       <div class="media">
         <div class="frame contain">${src ? `<img class="fade in ${S.flipping ? 'flip' : ''}" src="${esc(src)}" alt="${S.side === 'back' ? 'Back' : 'Front'} of No. ${d.no}" ${morph ? 'style="view-transition-name:piece"' : ''}>`
           : `<span class="none">${S.side === 'back' ? 'No back photo yet' : 'No photo yet'}</span>`}</div>
-        <div class="sides seg" role="group" aria-label="Side">
-          <button type="button" data-action="side" data-side="front" aria-pressed="${S.side !== 'back'}">Front</button>
-          <button type="button" data-action="side" data-side="back" aria-pressed="${S.side === 'back'}">Back</button>
-        </div>
-        <div class="tools">
-          ${src ? '<button class="btn" data-action="measure">Measure</button>' : ''}
-          <button class="btn" data-action="replace-photo" data-side="${S.side}">${src ? 'Replace' : 'Add'} ${S.side === 'back' ? 'back' : 'photo'}</button>
+        <div class="mediabar">
+          <div class="sides seg" role="group" aria-label="Side">
+            <button type="button" data-action="side" data-side="front" aria-pressed="${S.side !== 'back'}">Front</button>
+            <button type="button" data-action="side" data-side="back" aria-pressed="${S.side === 'back'}">Back</button>
+          </div>
+          <div class="tools">
+            ${src ? '<button class="btn" data-action="measure">Measure</button>' : ''}
+            <button class="btn" data-action="replace-photo" data-side="${S.side}">${src ? 'Replace' : 'Add'} ${S.side === 'back' ? 'back' : 'photo'}</button>
+          </div>
         </div>
       </div>
       <div class="info">
