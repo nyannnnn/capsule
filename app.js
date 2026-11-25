@@ -1,8 +1,8 @@
 import {
   CATEGORIES, FATES, STYLES, SEASONS, REFERENCES, MODE_LABELS, itemWeight, shipPlan, marginalYenPerKg,
   measureCm, fitEstimate, similarTo, colourFamily, suggestOutfit, outfitTip, parseDecisions, claudeSummary,
-} from './logic.js';
-import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js';
+} from './logic.js?v=202611251908';
+import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611251908';
 
 // ------------------------------------------------------------------ state
 const DEFAULT_SETTINGS = { boxTareKg: 1, carryLimitKg: 30, house: 'Max Luo', departure: '2026-12-17' };
@@ -197,7 +197,7 @@ function archiveView() {
       <span class="label">The archive</span>
       <h2 class="display">Nothing here yet.</h2>
       <p class="muted">Lay each piece flat with a credit card beside it and shoot from straight above. You can add a whole batch at once.</p>
-      <div class="row"><button class="btn solid" data-action="pick">Choose photos</button><button class="btn" data-action="camera">Take a photo</button></div>
+      <div class="row"><button class="btn solid" data-action="add">Add pieces</button></div>
     </section>`;
   const list = filtered(), f = S.filter;
   const worn = S.items.reduce((a, i) => a + (i.wear_count || 0), 0);
