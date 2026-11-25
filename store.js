@@ -1,12 +1,14 @@
 // Storage: Supabase when config.js has keys, otherwise this device only (IndexedDB).
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=202611251951';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=202611251954';
 
 export const cloudEnabled = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
 const BUCKET = 'closet';
-const SUFFIX = { full: '', thumb: '_t', back: '_b', backthumb: '_bt' };
+const SUFFIX = { full: '', thumb: '_t', back: '_b', backthumb: '_bt', cut: '_c', backcut: '_bc' };
+export const PHOTO_FIELDS = ['photo_path', 'thumb_path', 'back_path', 'back_thumb_path', 'cut_path', 'back_cut_path'];
+const ext = type => (type === 'image/png' ? 'png' : type === 'image/webp' ? 'webp' : 'jpg');
 const ITEM_FIELDS = ['no', 'name', 'category', 'colour', 'brand', 'size', 'styles', 'seasons', 'fit',
-  'condition', 'length_cm', 'width_cm', 'weight_g', 'fate', 'away', 'notes', 'photo_path', 'thumb_path', 'back_path', 'back_thumb_path',
+  'condition', 'length_cm', 'width_cm', 'weight_g', 'fate', 'away', 'notes', 'photo_path', 'thumb_path', 'back_path', 'back_thumb_path', 'cut_path', 'back_cut_path',
   'wear_count', 'last_worn'];
 
 function pick(item) {
@@ -62,7 +64,7 @@ class LocalStore {
   }
   async deleteItem(item) {
     await tx(this.db, 'items', 'readwrite', s => s.delete(item.id));
-    await tx(this.db, 'blobs', 'readwrite', s => { for (const k of ['photo_path', 'thumb_path', 'back_path', 'back_thumb_path']) if (item[k]) s.delete(item[k]); });
+    await tx(this.db, 'blobs', 'readwrite', s => { for (const k of PHOTO_FIELDS) if (item[k]) s.delete(item[k]); });
   }
   async uploadPhoto(path, blob) { await tx(this.db, 'blobs', 'readwrite', s => s.put(blob, path)); return path; }
   async photoUrls(paths) {
@@ -82,7 +84,7 @@ class LocalStore {
   async saveProfile(data) { await tx(this.db, 'kv', 'readwrite', s => s.put(data, 'profile')); }
   async listWears() { return (await tx(this.db, 'wears', 'readonly', s => s.getAll())) || []; }
   async addWear(w) { const row = { id: uuid(), ...w }; await tx(this.db, 'wears', 'readwrite', s => s.put(row)); return row; }
-  photoPath(id, kind) { return `local/${id}${SUFFIX[kind] || ''}.jpg`; }
+  photoPath(id, kind, type = 'image/jpeg') { return `local/${id}${SUFFIX[kind] || ''}.${ext(type)}`; }
 }
 
 // ---------------------------------------------------------------- cloud
@@ -115,12 +117,12 @@ class CloudStore {
     this.check(await this.sb.from('items').upsert(rows.map(r => ({ id: r.id, ...pick(r) }))));
   }
   async deleteItem(item) {
-    const paths = [item.photo_path, item.thumb_path, item.back_path, item.back_thumb_path].filter(Boolean);
+    const paths = PHOTO_FIELDS.map(k => item[k]).filter(Boolean);
     if (paths.length) await this.sb.storage.from(BUCKET).remove(paths);
     this.check(await this.sb.from('items').delete().eq('id', item.id));
   }
   async uploadPhoto(path, blob) {
-    this.check(await this.sb.storage.from(BUCKET).upload(path, blob, { upsert: true, contentType: 'image/jpeg' }));
+    this.check(await this.sb.storage.from(BUCKET).upload(path, blob, { upsert: true, contentType: blob.type || 'image/jpeg' }));
     this.urlCache.delete(path);
     return path;
   }
@@ -149,7 +151,7 @@ class CloudStore {
   }
   async listWears() { return this.check(await this.sb.from('wears').select('*').order('worn_on', { ascending: false })); }
   async addWear(w) { return this.check(await this.sb.from('wears').insert(w).select().single()); }
-  photoPath(id, kind) { return `${this.user.id}/${id}${SUFFIX[kind] || ''}.jpg`; }
+  photoPath(id, kind, type = 'image/jpeg') { return `${this.user.id}/${id}${SUFFIX[kind] || ''}.${ext(type)}`; }
 }
 
 export function createStore() { return cloudEnabled ? new CloudStore() : new LocalStore(); }

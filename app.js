@@ -1,8 +1,9 @@
 import {
   CATEGORIES, FATES, STYLES, SEASONS, REFERENCES, MODE_LABELS, itemWeight, shipPlan, marginalYenPerKg,
   measureCm, fitEstimate, similarTo, colourFamily, suggestOutfit, outfitTip, parseDecisions, claudeSummary,
-} from './logic.js?v=202611251951';
-import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611251951';
+} from './logic.js?v=202611251954';
+import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611251954';
+import { cutout, preload as preloadCutouts } from './bg.js?v=202611251954';
 
 // ------------------------------------------------------------------ state
 const DEFAULT_SETTINGS = { boxTareKg: 1, carryLimitKg: 30, house: 'Max Luo', departure: '2026-12-17' };
@@ -35,11 +36,31 @@ const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 const nextNo = () => S.items.reduce((m, i) => Math.max(m, i.no || 0), 0) + 1;
 const byId = id => S.items.find(i => i.id === id);
-const thumb = it => S.urls[it.thumb_path] || S.urls[it.photo_path] || '';
-const full = it => S.urls[it.photo_path] || S.urls[it.thumb_path] || '';
-const backThumb = it => S.urls[it.back_thumb_path] || S.urls[it.back_path] || '';
-const backFull = it => S.urls[it.back_path] || S.urls[it.back_thumb_path] || '';
-const PHOTO_KEYS = { photo_path: 'full', thumb_path: 'thumb', back_path: 'back', back_thumb_path: 'backthumb' };
+// Display prefers the background-removed cutout; originals stay for measuring.
+const thumb = it => S.urls[it.cut_path] || S.urls[it.thumb_path] || S.urls[it.photo_path] || '';
+const full = it => S.urls[it.cut_path] || S.urls[it.photo_path] || S.urls[it.thumb_path] || '';
+const backThumb = it => S.urls[it.back_cut_path] || S.urls[it.back_thumb_path] || S.urls[it.back_path] || '';
+const backFull = it => S.urls[it.back_cut_path] || S.urls[it.back_path] || S.urls[it.back_thumb_path] || '';
+const original = (it, side) => side === 'back' ? (S.urls[it.back_path] || S.urls[it.back_thumb_path] || '') : (S.urls[it.photo_path] || S.urls[it.thumb_path] || '');
+const cutCls = it => (it && it.cut_path ? 'cut' : '');
+const PHOTO_KEYS = { photo_path: 'full', thumb_path: 'thumb', back_path: 'back', back_thumb_path: 'backthumb', cut_path: 'cut', back_cut_path: 'backcut' };
+const cleanMode = () => { try { return localStorage.getItem('clean') !== '0'; } catch { return true; } };
+
+// Cut the garment out of its background and store it; returns the new path, or null if it fails.
+let cutCount = 0;
+async function makeCutout(id, blob, kind, label = '') {
+  try {
+    const out = await cutout(blob, (key, cur, total) => {
+      if (/fetch/.test(key) && total && cutCount === 0) toast(`Downloading the cutout model, ${Math.round(cur / total * 100)}%`);
+    });
+    cutCount++;
+    return await S.store.uploadPhoto(S.store.photoPath(id, kind, out.type), out);
+  } catch (e) {
+    console.warn('cutout failed', e);
+    toast(`Background cleanup failed${label ? ' for ' + label : ''}. The original photo is kept`);
+    return null;
+  }
+}
 const pairMode = () => { try { return localStorage.getItem('pairs') === '1'; } catch { return false; } };
 const slotOf = it => (CATEGORIES[it.category] || CATEGORIES.other).slot;
 
@@ -92,7 +113,7 @@ function ask(message, okLabel = 'Confirm', danger = false) {
 }
 
 async function refreshUrls(items = S.items) {
-  const paths = items.flatMap(i => [i.thumb_path, i.photo_path, i.back_thumb_path, i.back_path]).filter(Boolean);
+  const paths = items.flatMap(i => Object.keys(PHOTO_KEYS).map(k => i[k])).filter(Boolean);
   Object.assign(S.urls, await S.store.photoUrls(paths));
 }
 async function loadAll() {
@@ -184,7 +205,7 @@ function filtered() {
 function pieceHtml(it) {
   const fate = it.fate || 'undecided';
   return `<button class="piece" data-action="open" data-id="${it.id}" data-away="${!!it.away}">
-    <div class="frame">${photo(it)}${backThumb(it) ? `<img class="back" src="${esc(backThumb(it))}" alt="" loading="lazy">` : ''}${fate !== 'undecided' ? `<span class="fate-tag ${fate}">${FATE_NAMES[fate]}</span>` : ''}</div>
+    <div class="frame ${cutCls(it)}">${photo(it)}${backThumb(it) ? `<img class="back" src="${esc(backThumb(it))}" alt="" loading="lazy">` : ''}${fate !== 'undecided' ? `<span class="fate-tag ${fate}">${FATE_NAMES[fate]}</span>` : ''}</div>
     <div class="caption">
       <span class="name">${esc(it.name || catLabel(it.category))}</span><span class="no">No. ${pad(it.no)}</span>
       <span class="sub">${esc([it.brand, it.colour, it.size && 'Size ' + it.size].filter(Boolean).join(' · ') || 'Add details')}</span>
@@ -251,7 +272,9 @@ async function addFiles(files) {
         const b = await compressPhoto(back);
         row.back_path = await S.store.uploadPhoto(S.store.photoPath(id, 'back'), b.full);
         row.back_thumb_path = await S.store.uploadPhoto(S.store.photoPath(id, 'backthumb'), b.thumb);
+        if (cleanMode()) { toast(`Cleaning up ${done} of ${groups.length}`); row.back_cut_path = await makeCutout(id, b.full, 'backcut'); }
       }
+      if (cleanMode()) { toast(`Cleaning up ${done} of ${groups.length}`); row.cut_path = await makeCutout(id, f.full, 'cut'); }
       S.items.push(await S.store.saveItem(row));
     }, 'Couldn’t add a photo');
   }
@@ -263,7 +286,7 @@ async function addFiles(files) {
 // ------------------------------------------------------------------ product page (item editor)
 function openEditor(item, blobs = null, backBlobs = null, fromEl = null) {
   S.draft = { ...item, styles: [...(item.styles || [])], seasons: [...(item.seasons || [])] };
-  S.draftBlobs = blobs; S.draftBack = backBlobs; S.side = 'front';
+  S.draftBlobs = blobs; S.draftBack = backBlobs; S.side = 'front'; S.showOriginal = false;
   if (blobs) S.draftUrl = URL.createObjectURL(blobs.full);
   if (backBlobs) S.draftBackUrl = URL.createObjectURL(backBlobs.full);
   const img = fromEl?.querySelector('img');
@@ -318,8 +341,12 @@ function refreshEditorBits() {
 
 function renderEditor(morph = false) {
   const d = S.draft;
-  const front = S.draftUrl || full(d), back = S.draftBackUrl || backFull(d);
+  const showOrig = S.showOriginal;
+  const front = S.draftUrl || (showOrig ? original(d, 'front') : full(d));
+  const back = S.draftBackUrl || (showOrig ? original(d, 'back') : backFull(d));
   const src = S.side === 'back' ? back : front;
+  const hasCut = S.side === 'back' ? (d.back_cut_path && !S.draftBackUrl) : (d.cut_path && !S.draftUrl);
+  const isCut = hasCut && !showOrig;
   const chips = (list, key) => `<div class="row" style="gap:18px">${list.map(v =>
     `<button type="button" class="textbtn" data-action="toggle-chip" data-key="${key}" data-val="${v}" aria-pressed="${d[key].includes(v)}">${v}</button>`).join('')}</div>`;
   const slot = CATEGORIES[d.category]?.slot;
@@ -330,7 +357,7 @@ function renderEditor(morph = false) {
     <div class="sheetbar"><span class="label">No. ${pad(d.no)}</span><button class="textbtn" data-action="close">Close</button></div>
     <div class="product">
       <div class="media">
-        <div class="frame contain">${src ? `<img class="fade in ${S.flipping ? 'flip' : ''}" src="${esc(src)}" alt="${S.side === 'back' ? 'Back' : 'Front'} of No. ${d.no}" ${morph ? 'style="view-transition-name:piece"' : ''}>`
+        <div class="frame contain ${isCut ? 'cut' : ''}">${src ? `<img class="fade in ${S.flipping ? 'flip' : ''}" src="${esc(src)}" alt="${S.side === 'back' ? 'Back' : 'Front'} of No. ${d.no}" ${morph ? 'style="view-transition-name:piece"' : ''}>`
           : `<span class="none">${S.side === 'back' ? 'No back photo yet' : 'No photo yet'}</span>`}</div>
         <div class="mediabar">
           <div class="sides seg" role="group" aria-label="Side">
@@ -338,6 +365,7 @@ function renderEditor(morph = false) {
             <button type="button" data-action="side" data-side="back" aria-pressed="${S.side === 'back'}">Back</button>
           </div>
           <div class="tools">
+            ${hasCut ? `<button class="btn" data-action="toggle-original">${showOrig ? 'Cutout' : 'Original'}</button>` : ''}
             ${src ? '<button class="btn" data-action="measure">Measure</button>' : ''}
             <button class="btn" data-action="replace-photo" data-side="${S.side}">${src ? 'Replace' : 'Add'} ${S.side === 'back' ? 'back' : 'photo'}</button>
           </div>
@@ -385,10 +413,14 @@ async function saveDraft() {
     if (S.draftBlobs) {
       d.photo_path = await S.store.uploadPhoto(S.store.photoPath(d.id, 'full'), S.draftBlobs.full);
       d.thumb_path = await S.store.uploadPhoto(S.store.photoPath(d.id, 'thumb'), S.draftBlobs.thumb);
+      d.cut_path = null;
+      if (cleanMode()) { toast('Cleaning up the background'); d.cut_path = await makeCutout(d.id, S.draftBlobs.full, 'cut'); }
     }
     if (S.draftBack) {
       d.back_path = await S.store.uploadPhoto(S.store.photoPath(d.id, 'back'), S.draftBack.full);
       d.back_thumb_path = await S.store.uploadPhoto(S.store.photoPath(d.id, 'backthumb'), S.draftBack.thumb);
+      d.back_cut_path = null;
+      if (cleanMode()) { toast('Cleaning up the back'); d.back_cut_path = await makeCutout(d.id, S.draftBack.full, 'backcut'); }
     }
     for (const k of ['length_cm', 'width_cm', 'weight_g']) d[k] = d[k] === '' || d[k] == null ? null : Number(d[k]);
     const saved = await S.store.saveItem(d);
@@ -401,7 +433,7 @@ async function saveDraft() {
 
 // ------------------------------------------------------------------ measure overlay
 function openMeasure() {
-  const src = S.side === 'back' ? (S.draftBackUrl || backFull(S.draft)) : (S.draftUrl || full(S.draft));
+  const src = S.side === 'back' ? (S.draftBackUrl || original(S.draft, 'back')) : (S.draftUrl || original(S.draft, 'front'));
   const root = document.createElement('div');
   root.className = 'measure';
   root.innerHTML = `
@@ -516,7 +548,7 @@ function lookView() {
     <div class="look ${t.fresh ? 'enter' : ''}">
       ${Object.entries(o).map(([slot, it], i) => `
         <div class="piece" style="--i:${i}">
-          <div class="frame">${it ? photo(it) : '<span class="none">Nothing suitable</span>'}</div>
+          <div class="frame ${cutCls(it)}">${it ? photo(it) : '<span class="none">Nothing suitable</span>'}</div>
           <div class="caption"><span class="name">${it ? esc(it.name || catLabel(it.category)) : '—'}</span><span class="no">${it ? 'No. ' + pad(it.no) : ''}</span>
             <span class="sub">${slotNames[slot]}</span></div>
           <div class="slotrow">
@@ -625,7 +657,7 @@ function sorterHtml(list) {
   const it = list[0];
   const w = itemWeight(it), fit = fitEstimate(it, S.profile), sims = similarTo(it, S.items);
   return `<div class="sorter" id="sorter">
-    <div class="frame contain arrive">${photo(it, 'full')}</div>
+    <div class="frame contain arrive ${cutCls(it)}">${photo(it, 'full')}</div>
     <div style="display:grid;gap:22px;align-content:start">
       <div style="display:grid;gap:6px"><span class="label">No. ${pad(it.no)} · ${list.length - 1} more after this</span>
         <h3 class="display page-title">${esc(it.name || catLabel(it.category))}</h3></div>
@@ -653,7 +685,7 @@ function pileHtml(list, fate) {
   return extra + `<div class="pile">${list.map(it => {
     const w = itemWeight(it);
     return `<div class="li">
-      <div class="frame">${photo(it)}</div>
+      <div class="frame ${cutCls(it)}">${photo(it)}</div>
       <button class="open" data-action="open" data-id="${it.id}">
         <div class="t">${esc(it.name || catLabel(it.category))}</div>
         <div class="small muted">No. ${pad(it.no)} · ${w.grams} g${w.estimated ? ', typical' : ''}${it.away ? ' · posted' : ''}</div></button>
@@ -738,6 +770,7 @@ function fittingView() {
       <div class="row">
         <button class="btn" data-action="backup">Download backup</button>
         <button class="btn quiet" data-action="restore">Restore backup</button>
+        ${needsCleanup().length ? `<button class="btn" data-action="clean-all">Remove backgrounds (${needsCleanup().length})</button>` : ''}
         ${S.store.mode === 'cloud' ? '<button class="btn danger" data-action="signout">Sign out</button>' : ''}
       </div>
     </section></div>`;
@@ -867,6 +900,38 @@ async function restore(file) {
   }, 'Restore failed');
 }
 
+// ------------------------------------------------------------------ background cleanup for existing pieces
+function needsCleanup() {
+  return S.items.filter(i => (i.photo_path && !i.cut_path) || (i.back_path && !i.back_cut_path));
+}
+let cleaning = false;
+async function cleanAll() {
+  if (cleaning) return;
+  const todo = needsCleanup();
+  if (!todo.length) return toast('Every photo is already cleaned up');
+  cleaning = true;
+  let n = 0, ok = 0;
+  try {
+    for (const it of todo) {
+      n++;
+      const row = { ...it };
+      if (it.photo_path && !it.cut_path) {
+        toast(`Removing backgrounds, ${n} of ${todo.length}`);
+        row.cut_path = await makeCutout(it.id, await S.store.getBlob(it.photo_path), 'cut', 'No. ' + pad(it.no));
+      }
+      if (it.back_path && !it.back_cut_path) {
+        row.back_cut_path = await makeCutout(it.id, await S.store.getBlob(it.back_path), 'backcut', 'No. ' + pad(it.no));
+      }
+      if (row.cut_path !== it.cut_path || row.back_cut_path !== it.back_cut_path) {
+        await guard(async () => { await S.store.updateMany([row]); S.items[S.items.findIndex(i => i.id === row.id)] = row; ok++; });
+      }
+    }
+    await refreshUrls();
+    toast(`Cleaned up ${plural(ok, 'piece')}`);
+    render();
+  } finally { cleaning = false; }
+}
+
 // ------------------------------------------------------------------ events
 document.addEventListener('click', async e => {
   const el = e.target.closest('[data-action]');
@@ -886,6 +951,7 @@ document.addEventListener('click', async e => {
           <h2 class="display page-title">New to the archive</h2>
           <p class="muted">Lay the piece flat with a credit card beside it and shoot from straight above. The card lets you measure it later.</p>
           <label class="check"><input type="checkbox" id="pairs" data-action="pairs" ${pairMode() ? 'checked' : ''}>My photos come in pairs: front, then back</label>
+          <label class="check"><input type="checkbox" id="clean" data-action="clean" ${cleanMode() ? 'checked' : ''}>Remove backgrounds automatically</label>
           <p class="hint" style="margin-top:-10px">Shoot each piece front then back, then choose all the photos at once. They’re paired in the order they were taken.</p>
           <button class="btn solid block" data-action="pick">Choose photos</button>
           <button class="btn block" data-action="camera">Take a photo</button></div>`); break;
@@ -928,6 +994,9 @@ document.addEventListener('click', async e => {
       S.side = el.dataset.side; S.flipping = !reduced();
       const y = $('.sheet').scrollTop; renderEditor(); $('.sheet').scrollTop = y; S.flipping = false; break;
     }
+    case 'clean': { try { localStorage.setItem('clean', el.checked ? '1' : '0'); } catch {} if (el.checked) preloadCutouts(); break; }
+    case 'toggle-original': { S.showOriginal = !S.showOriginal; const y = $('.sheet').scrollTop; renderEditor(); $('.sheet').scrollTop = y; break; }
+    case 'clean-all': await cleanAll(); break;
     case 'pairs': {
       try { localStorage.setItem('pairs', el.checked ? '1' : '0'); } catch {}
       break;

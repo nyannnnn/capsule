@@ -24,6 +24,8 @@ create table if not exists public.items (
   thumb_path  text,
   back_path   text,
   back_thumb_path text,
+  cut_path    text,
+  back_cut_path text,
   wear_count  int default 0,
   last_worn   date,
   created_at  timestamptz default now()
