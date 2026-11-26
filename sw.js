@@ -1,6 +1,6 @@
 // Capsule offline cache. Lets the app open instantly and show your archive on a bad or blocked
 // connection, and keeps the cutout model so background removal works without reaching its server.
-const VERSION = '202611260937'; // stamped on every release
+const VERSION = '202611261208'; // stamped on every release
 const SHELL = `capsule-shell-${VERSION}`;
 const PHOTOS = 'capsule-photos-v1';
 const MODEL = 'capsule-model-v1';

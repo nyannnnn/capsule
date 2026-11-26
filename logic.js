@@ -300,3 +300,107 @@ export function claudeSummary(items, profile, settings) {
   lines.push('Reply with decisions as lines like "12 ship", "13 toss", "14 carry" and I can paste them back into the app.');
   return lines.join('\n');
 }
+
+// ======================================================================
+// Phase 2: true-to-scale "On you". Every value is in centimetres; y runs down from the top of the head.
+// ======================================================================
+const num = v => (v === '' || v == null || isNaN(Number(v)) ? null : Number(v));
+
+// Body landmarks from your measurements. Anything missing is estimated from height and weight,
+// and listed in `estimated` so the app can say so.
+export function bodyModel(profile = {}) {
+  const estimated = [];
+  const pick = (key, fallback) => { const v = num(profile[key]); if (v) return v; estimated.push(key); return fallback; };
+  const h = pick('height_cm', 175);
+  const kg = pick('weight_kg', 22 * (h / 100) ** 2);
+  const g = Math.sqrt((kg / (h / 100) ** 2) / 22); // build relative to an average frame
+  const r = Math.sqrt(h / 178);
+  const chest = pick('chest_cm', 96 * g * r);
+  const waist = pick('waist_cm', 80 * g ** 1.3 * r);
+  const hips = pick('hips_cm', 95 * g * r);
+  const shoulder = pick('shoulder_cm', 46 * (h / 178) * Math.sqrt(g));
+  const inseam = pick('inseam_cm', 0.455 * h);
+  const sleeve = pick('sleeve_cm', 0.345 * h);
+  const hh = h / 7.6; // head height: real proportions, not a stretched fashion croquis
+  return {
+    h, chest, waist, hips, shoulder, inseam, sleeve, estimated: estimated.filter(k => k !== 'weight_kg'),
+    head: { cy: hh * 0.5, rx: hh * 0.37, ry: hh * 0.5 },
+    neckY: hh * 1.2,            // base of the neck: where a garment's length is measured from
+    shoulderY: hh * 1.4,
+    chestY: hh * 1.95,
+    waistY: h * 0.385,
+    hipY: h * 0.48,
+    crotchY: h - inseam,
+    kneeY: h - inseam * 0.5,
+    ankleY: h - 7,
+    floor: h,
+    neckHalf: h * 0.034,
+    shoulderHalf: shoulder / 2,
+    chestHalf: chest * 0.165,
+    waistHalf: waist * 0.16,
+    hipHalf: hips * 0.17,
+  };
+}
+
+// Typical garment lengths, used only when a piece has no length yet.
+const TYPICAL_LENGTH = { tshirt: 70, longsleeve: 70, shirt: 76, polo: 70, tank: 68, sweater: 66, hoodie: 68,
+  jacket: 70, coat: 100, gym: 66, jeans: 102, trousers: 102, sweatpants: 100, shorts: 50 };
+
+// Where a garment image goes on the body. `m` describes its transparent cutout:
+// { w, h } in pixels, plus `torsoPx`, the body width measured across the lower torso.
+export function placeGarment(item, m, body) {
+  const slot = (CATEGORIES[item.category] || CATEGORIES.other).slot;
+  if (!m || !m.w || !m.h) return null;
+  if (slot === 'top' || slot === 'outer' || slot === 'sport') {
+    const length = num(item.length_cm) || TYPICAL_LENGTH[item.category] || 70;
+    const width = num(item.width_cm);
+    let s; // centimetres per pixel
+    if (width && m.torsoPx) s = width / m.torsoPx;
+    else s = length / (m.h * (item.category === 'hoodie' ? 0.75 : 0.95));
+    // Guard against a bad torso reading: the scaled image must be about as tall as the garment's length
+    // (a hood or collar can add up to ~60% on top). Otherwise scale by length instead.
+    const tall = m.h * s;
+    const maxTall = item.category === 'hoodie' ? 1.65 : 1.25; // only hoods add much height above the neck
+    if (tall < length * 0.85 || tall > length * maxTall) s = length / (m.h * (item.category === 'hoodie' ? 0.75 : 0.95));
+    const W = m.w * s, H = m.h * s;
+    const hemY = body.neckY + length;
+    return { slot, x: -W / 2, y: hemY - H, w: W, h: H, hemY, scale: s, layer: slot === 'outer' ? 3 : 2 };
+  }
+  if (slot === 'bottom') {
+    const topY = body.waistY + (body.hipY - body.waistY) * 0.25; // trousers sit just below the natural waist
+    const length = num(item.length_cm) || Math.min(TYPICAL_LENGTH[item.category] || 100, body.floor - topY - 1);
+    const s = length / m.h;
+    const W = m.w * s;
+    return { slot, x: -W / 2, y: topY, w: W, h: length, hemY: topY + length, scale: s, layer: 1 };
+  }
+  if (slot === 'shoes') {
+    const s = 30 / Math.max(m.w, m.h);
+    const W = m.w * s, H = m.h * s;
+    return { slot, x: -W / 2, y: body.floor - H + 2, w: W, h: H, hemY: body.floor, scale: s, layer: 0 };
+  }
+  return null; // accessories and basics are not drawn
+}
+
+// Plain-language notes on how a piece sits, from the numbers.
+export function fitHints(item, place, body, profile) {
+  if (!place) return [];
+  const out = [];
+  const f = fitEstimate(item, profile);
+  if (place.slot === 'bottom') {
+    const y = place.hemY;
+    out.push(y < body.ankleY - 6 ? 'Cropped, hem above the ankle'
+      : y < body.ankleY - 1 ? 'Ankle length'
+      : y < body.floor - 1.5 ? 'Slight break at the shoe'
+      : 'Full break, will stack at the shoe');
+    if (f) out.push(`${f.verdict} at the waist${f.ease ? `, ${f.ease > 0 ? '+' : ''}${f.ease} cm` : ''}`);
+  } else if (place.slot !== 'shoes') {
+    const y = place.hemY;
+    out.push(y < body.waistY + 3 ? 'Cropped, hem at the waist'
+      : y < body.hipY - 2 ? 'Hem at the high hip'
+      : y < body.crotchY - 2 ? 'Hem at mid-hip'
+      : y < body.crotchY + 7 ? 'Hem at the seat'
+      : 'Long, hem on the thigh');
+    if (f) out.push(`${f.verdict} through the chest, ${f.ease > 0 ? '+' : ''}${f.ease} cm of room`);
+  }
+  return out;
+}

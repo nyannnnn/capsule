@@ -1,14 +1,14 @@
 // Storage: Supabase when config.js has keys, otherwise this device only (IndexedDB).
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=202611260937';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=202611261208';
 
 export const cloudEnabled = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
 const BUCKET = 'closet';
-const SUFFIX = { full: '', thumb: '_t', back: '_b', backthumb: '_bt', cut: '_c', backcut: '_bc' };
-export const PHOTO_FIELDS = ['photo_path', 'thumb_path', 'back_path', 'back_thumb_path', 'cut_path', 'back_cut_path'];
+const SUFFIX = { full: '', thumb: '_t', back: '_b', backthumb: '_bt', cut: '_c', backcut: '_bc', fit: '_f', backfit: '_bf' };
+export const PHOTO_FIELDS = ['photo_path', 'thumb_path', 'back_path', 'back_thumb_path', 'cut_path', 'back_cut_path', 'fit_path', 'back_fit_path'];
 const ext = type => (type === 'image/png' ? 'png' : type === 'image/webp' ? 'webp' : 'jpg');
 const ITEM_FIELDS = ['no', 'name', 'category', 'colour', 'brand', 'size', 'styles', 'seasons', 'fit',
-  'condition', 'length_cm', 'width_cm', 'weight_g', 'fate', 'away', 'notes', 'photo_path', 'thumb_path', 'back_path', 'back_thumb_path', 'cut_path', 'back_cut_path',
+  'condition', 'length_cm', 'width_cm', 'weight_g', 'fate', 'away', 'notes', 'photo_path', 'thumb_path', 'back_path', 'back_thumb_path', 'cut_path', 'back_cut_path', 'fit_path', 'back_fit_path',
   'wear_count', 'last_worn'];
 
 function pick(item) {

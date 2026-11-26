@@ -42,6 +42,7 @@ export async function finish(png, original = null, maxEdge = 900) {
   const box = bounds(img);
   if (!box) throw new Error('No garment found in the photo');
   const { x0, y0, w, h } = box;
+  const fit = await fitAsset(c, box);
   const s = Math.min(1, maxEdge / Math.max(w, h));
   const gw = Math.round(w * s), gh = Math.round(h * s);
   const pad = Math.round(Math.max(gw, gh) * 0.07);
@@ -54,7 +55,20 @@ export async function finish(png, original = null, maxEdge = 900) {
   o.shadowBlur = Math.round(Math.max(gw, gh) * 0.03);
   o.shadowOffsetY = Math.round(Math.max(gw, gh) * 0.018);
   o.drawImage(c, x0, y0, w, h, pad, pad, gw, gh);
-  return new Promise(res => out.toBlob(res, 'image/jpeg', 0.86));
+  const display = await new Promise(res => out.toBlob(res, 'image/jpeg', 0.86));
+  return { display, fit };
+}
+
+// Tightly trimmed, transparent copy for layering on the figure in the On you view.
+// WebP where the browser can encode it (much smaller), PNG otherwise (Safari).
+async function fitAsset(c, { x0, y0, w, h }, maxEdge = 640) {
+  const s = Math.min(1, maxEdge / Math.max(w, h));
+  const out = document.createElement('canvas');
+  out.width = Math.max(1, Math.round(w * s)); out.height = Math.max(1, Math.round(h * s));
+  out.getContext('2d').drawImage(c, x0, y0, w, h, 0, 0, out.width, out.height);
+  const webp = await new Promise(res => out.toBlob(res, 'image/webp', 0.88));
+  if (webp && webp.type === 'image/webp') return webp;
+  return new Promise(res => out.toBlob(res, 'image/png'));
 }
 
 // Colour refinement. The model is confident about most of the garment and most of the rug; where it

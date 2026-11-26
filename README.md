@@ -21,6 +21,7 @@ I was moving countries with one checked bag and a closet that didn't fit in it. 
 | **Measure from a photo** | Lay the piece flat beside a credit card, tap the card's two ends, then the garment's length and width. The card's known 85.6 mm edge sets the scale. |
 | **Fit check** | Compares flat garment width against your body measurements and calls the fit: slim, regular, relaxed, oversized. |
 | **Look** | Picks a top, bottom, shoes and, when it's cold, an outer layer, using the day's temperature, your chosen style and what you haven't worn lately. Shown as an editorial flat-lay; keep the pieces you like, swap the rest, log the look, or save it as a 4:5 image to share. |
+| **On you** | A true-to-scale 3D turntable. A figure is drawn from your measurements (estimated from height and weight until you add them), and each garment's transparent cutout is scaled to its measured centimetres and layered at depth: trousers, then top, then outerwear. Drag to turn; past the side it switches to the back photos. Fit notes say where hems land. |
 | **Travel** | Shows days until departure and a bag bar that fills piece by piece against your allowance. A one-at-a-time sorter shows weight, wear count and look-alikes you already own: swipe the photo right to carry or left to toss, or use C, S, T on a keyboard. Every move can be undone. |
 | **Before you buy** | Name a type and colour, and it tells you how many similar pieces you own and how often they actually get worn. |
 | **Ask Claude** | Exports the archive as a text summary plus a numbered contact sheet, and parses decisions pasted back ("12 carry, 13 toss") into bulk updates. |
@@ -40,6 +41,8 @@ I was moving countries with one checked bag and a closet that didn't fit in it. 
 $$\text{cm} = \frac{d_\text{garment}}{d_\text{ref}} \cdot L_\text{ref}$$
 
 This assumes the card and garment lie in the same plane and the photo is shot straight down, which the app asks for. Points can be dragged after placing them to fine-tune.
+
+**On you.** Garments are anchored by type: a top's hem sits at the base of the neck plus its measured length, trousers start just below the natural waist, shoes stand on the floor. Tops are scaled so their measured flat width matches the torso width found in the cutout (the widest solid run across the lower body, ignoring sleeves); if that reading is implausible for the garment's length, the length sets the scale instead. The stage is plain CSS 3D, with garment planes at a few centimetres of depth, so it runs smoothly on a phone.
 
 **Fit.** For tops, flat pit-to-pit width $w$ doubles to roughly the garment's chest circumference, so ease is $2w - \text{chest}$. Under 2 cm reads as too tight, 8–16 cm as regular, and over 26 cm as oversized. Bottoms use waist with tighter bands.
 
@@ -72,6 +75,7 @@ store.js              storage adapter: Supabase, or IndexedDB when no keys are s
 sw.js                 offline cache for the app, photos and cutout model
 fonts/, vendor/       self-hosted fonts and bundled libraries (Supabase JS, background removal)
 bg.js                 background removal and trimming
+tryon.js              On you: figure drawing, garment measurement, 3D turntable
 schema.sql            tables, photo bucket, row level security
 ```
 

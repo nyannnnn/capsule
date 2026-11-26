@@ -1,9 +1,11 @@
 import {
   CATEGORIES, FATES, STYLES, SEASONS, REFERENCES, MODE_LABELS, itemWeight, shipPlan, marginalYenPerKg,
   measureCm, fitEstimate, similarTo, colourFamily, suggestOutfit, outfitTip, parseDecisions, claudeSummary,
-} from './logic.js?v=202611260937';
-import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611260937';
-import { cutout, finish as finishCutout, preload as preloadCutouts } from './bg.js?v=202611260937';
+  bodyModel, placeGarment, fitHints,
+} from './logic.js?v=202611261208';
+import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611261208';
+import { cutout, preload as preloadCutouts } from './bg.js?v=202611261208';
+import { measure, renderStage, spinTo } from './tryon.js?v=202611261208';
 
 // ------------------------------------------------------------------ state
 const DEFAULT_SETTINGS = { boxTareKg: 1, carryLimitKg: 30, house: 'Max Luo', departure: '2026-12-17' };
@@ -21,6 +23,7 @@ const S = {
   today: { tempC: null, feels: null, hi: null, lo: null, style: '', locked: {}, outfit: null, place: '', fresh: true },
   pack: { tab: 'undecided' },
   draft: null, draftBlobs: null, decisions: null, introDone: false,
+  lookMode: (() => { try { return localStorage.getItem('lookMode') || 'flat'; } catch { return 'flat'; } })(),
 };
 const settings = () => ({ ...DEFAULT_SETTINGS, ...(S.profile.settings || {}) });
 
@@ -43,22 +46,26 @@ const backThumb = it => S.urls[it.back_cut_path] || S.urls[it.back_thumb_path] |
 const backFull = it => S.urls[it.back_cut_path] || S.urls[it.back_path] || S.urls[it.back_thumb_path] || '';
 const original = (it, side) => side === 'back' ? (S.urls[it.back_path] || S.urls[it.back_thumb_path] || '') : (S.urls[it.photo_path] || S.urls[it.thumb_path] || '');
 const cutCls = it => (it && S.urls[it.cut_path] ? 'cut' : '');
-const PHOTO_KEYS = { photo_path: 'full', thumb_path: 'thumb', back_path: 'back', back_thumb_path: 'backthumb', cut_path: 'cut', back_cut_path: 'backcut' };
+const PHOTO_KEYS = { photo_path: 'full', thumb_path: 'thumb', back_path: 'back', back_thumb_path: 'backthumb', cut_path: 'cut', back_cut_path: 'backcut', fit_path: 'fit', back_fit_path: 'backfit' };
 const cleanMode = () => { try { return localStorage.getItem('clean') !== '0'; } catch { return true; } };
 
-// Cut the garment out of its background and store it; returns the new path, or null if it fails.
+// Cut the garment out of its background and store two copies: the studio shot for display and a
+// transparent one for the On you view. Sets the row's fields; returns false if it fails.
 let cutCount = 0;
-async function makeCutout(id, blob, kind, label = '') {
+async function applyCutout(row, id, blob, side = 'front', label = '') {
+  const back = side === 'back';
   try {
     const out = await cutout(blob, (key, cur, total) => {
       if (/fetch/.test(key) && total && cutCount === 0) toast(`Downloading the cutout model, ${Math.round(cur / total * 100)}%`);
     });
     cutCount++;
-    return await S.store.uploadPhoto(S.store.photoPath(id, kind, out.type), out);
+    row[back ? 'back_cut_path' : 'cut_path'] = await S.store.uploadPhoto(S.store.photoPath(id, back ? 'backcut' : 'cut', out.display.type), out.display);
+    row[back ? 'back_fit_path' : 'fit_path'] = await S.store.uploadPhoto(S.store.photoPath(id, back ? 'backfit' : 'fit', out.fit.type), out.fit);
+    return true;
   } catch (e) {
     console.warn('cutout failed', e);
     toast(`Background cleanup failed${label ? ' for ' + label : ''}. The original photo is kept`);
-    return null;
+    return false;
   }
 }
 const pairMode = () => { try { return localStorage.getItem('pairs') === '1'; } catch { return false; } };
@@ -221,6 +228,7 @@ function render() {
     <input type="file" id="importfile" accept="application/json" hidden>`);
   S.introDone = true;
   S.today.fresh = false;
+  if (S.view === 'look' && S.lookMode === 'body' && !S.loading) fillLookOnYou();
 }
 
 const TAB_ICONS = {
@@ -415,9 +423,9 @@ async function addFiles(files) {
         const b = await compressPhoto(back);
         row.back_path = await S.store.uploadPhoto(S.store.photoPath(id, 'back'), b.full);
         row.back_thumb_path = await S.store.uploadPhoto(S.store.photoPath(id, 'backthumb'), b.thumb);
-        if (cleanMode()) { toast(`Cleaning up ${done} of ${groups.length}`); row.back_cut_path = await makeCutout(id, b.full, 'backcut'); }
+        if (cleanMode()) { toast(`Cleaning up ${done} of ${groups.length}`); await applyCutout(row, id, b.full, 'back'); }
       }
-      if (cleanMode()) { toast(`Cleaning up ${done} of ${groups.length}`); row.cut_path = await makeCutout(id, f.full, 'cut'); }
+      if (cleanMode()) { toast(`Cleaning up ${done} of ${groups.length}`); await applyCutout(row, id, f.full, 'front'); }
       S.items.push(await S.store.saveItem(row));
     }, 'Couldn’t add a photo');
   }
@@ -579,6 +587,12 @@ function renderEditor(morph = false, slide = 0) {
           <label class="check full"><input type="checkbox" id="d-away" data-draft="away" ${d.away ? 'checked' : ''}>Not with me right now</label>
         </div>
         <div class="facts" id="d-facts">${editorFacts(d)}</div>
+        ${!d._new && DRAWN.includes(slotOf(d)) ? `<div class="onyou piece" id="piece-onyou">
+          <span class="label">On you</span>
+          <div class="stagewrap"><div class="stage-loading"></div></div>
+          ${sideToggle()}
+          <div class="hints inline" id="piece-hints"></div><div id="piece-notes"></div>
+        </div>` : ''}
         ${d._new ? '' : '<button class="textbtn deletelink" data-action="delete">Delete this piece</button>'}
         <div class="actionbar">
           <button class="btn solid" data-action="save">Save</button>
@@ -586,6 +600,7 @@ function renderEditor(morph = false, slide = 0) {
         </div>
       </div>
     </div>`);
+  fillPieceOnYou();
 }
 
 async function saveDraft(close = true) {
@@ -594,14 +609,14 @@ async function saveDraft(close = true) {
     if (S.draftBlobs) {
       d.photo_path = await S.store.uploadPhoto(S.store.photoPath(d.id, 'full'), S.draftBlobs.full);
       d.thumb_path = await S.store.uploadPhoto(S.store.photoPath(d.id, 'thumb'), S.draftBlobs.thumb);
-      d.cut_path = null;
-      if (cleanMode()) { toast('Cleaning up the background'); d.cut_path = await makeCutout(d.id, S.draftBlobs.full, 'cut'); }
+      d.cut_path = null; d.fit_path = null;
+      if (cleanMode()) { toast('Cleaning up the background'); await applyCutout(d, d.id, S.draftBlobs.full, 'front'); }
     }
     if (S.draftBack) {
       d.back_path = await S.store.uploadPhoto(S.store.photoPath(d.id, 'back'), S.draftBack.full);
       d.back_thumb_path = await S.store.uploadPhoto(S.store.photoPath(d.id, 'backthumb'), S.draftBack.thumb);
-      d.back_cut_path = null;
-      if (cleanMode()) { toast('Cleaning up the back'); d.back_cut_path = await makeCutout(d.id, S.draftBack.full, 'backcut'); }
+      d.back_cut_path = null; d.back_fit_path = null;
+      if (cleanMode()) { toast('Cleaning up the back'); await applyCutout(d, d.id, S.draftBack.full, 'back'); }
     }
     for (const k of ['length_cm', 'width_cm', 'weight_g']) d[k] = d[k] === '' || d[k] == null ? null : Number(d[k]);
     const saved = await S.store.saveItem(d);
@@ -698,6 +713,77 @@ function openMeasure() {
   addEventListener('resize', layout);
 }
 
+// ------------------------------------------------------------------ On you (3D turntable)
+const DRAWN = ['top', 'outer', 'sport', 'bottom', 'shoes'];
+const ESTIMATE_NAMES = { height_cm: 'height', chest_cm: 'chest', waist_cm: 'waist', hips_cm: 'hips', shoulder_cm: 'shoulders', inseam_cm: 'inseam', sleeve_cm: 'sleeve' };
+const mirrors = new Map();
+// A piece without a back photo shows its front, mirrored, from behind.
+async function mirroredUrl(path) {
+  if (mirrors.has(path)) return mirrors.get(path);
+  const bmp = await createImageBitmap(await S.store.getBlob(path));
+  const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+  const g = c.getContext('2d'); g.translate(c.width, 0); g.scale(-1, 1); g.drawImage(bmp, 0, 0);
+  const url = URL.createObjectURL(await new Promise(r => c.toBlob(r, 'image/webp', 0.88)));
+  mirrors.set(path, url);
+  return url;
+}
+async function onYouLayers(pieces) {
+  const body = bodyModel(S.profile);
+  const layers = []; let missing = 0;
+  for (const it of pieces) {
+    if (!it || !DRAWN.includes(slotOf(it))) continue;
+    if (!it.fit_path) { missing++; continue; }
+    try {
+      const get = p => S.store.getBlob(p);
+      const place = placeGarment(it, await measure(it.fit_path, get), body);
+      if (!place) continue;
+      const L = { item: it, place, front: S.urls[it.fit_path] };
+      if (it.back_fit_path) { L.back = S.urls[it.back_fit_path]; L.backPlace = placeGarment(it, await measure(it.back_fit_path, get), body); }
+      else { L.back = await mirroredUrl(it.fit_path); L.backPlace = place; L.shadeBack = true; }
+      if (L.front) layers.push(L);
+    } catch (e) { console.warn('On you: skipped', it.no, e); missing++; }
+  }
+  return { body, layers, missing };
+}
+function onYouNotes(body, missing) {
+  const est = body.estimated.map(k => ESTIMATE_NAMES[k]).filter(Boolean);
+  return [
+    est.length ? `<p class="note">Your ${est.length > 3 ? est.slice(0, 3).join(', ') + ' and more' : est.join(', ')} ${est.length === 1 ? 'is' : 'are'} estimated from your height and weight. <button class="link" data-action="go" data-view="fitting">Add measurements</button> for a true fit.</p>` : '',
+    missing ? `<p class="note">${plural(missing, 'piece')} ${missing === 1 ? 'needs' : 'need'} a quick photo prep before ${missing === 1 ? 'it shows' : 'they show'} here. <button class="link" data-action="clean-all">Prepare now</button></p>` : '',
+  ].join('');
+}
+const sideToggle = () => `<div class="seg sidetoggle" role="group" aria-label="Turn">
+  <button type="button" data-action="spin" data-to="front" aria-pressed="true">Front</button>
+  <button type="button" data-action="spin" data-to="back" aria-pressed="false">Back</button></div>`;
+
+let lookFill = 0;
+async function fillLookOnYou() {
+  const ticket = ++lookFill;
+  const wrap = $('#look-onyou .stagewrap'); if (!wrap) return;
+  const slotNames = { top: 'Top', outer: 'Outerwear', bottom: 'Bottom', shoes: 'Shoes', sport: 'Training' };
+  const { body, layers, missing } = await onYouLayers(Object.values(S.today.outfit || {}));
+  if (ticket !== lookFill || !wrap.isConnected) return;
+  renderStage(wrap, body, layers, { maxH: innerWidth < 900 ? 0.62 : 0.74 });
+  $('#look-hints').innerHTML = layers.filter(L => L.place.slot !== 'shoes').map(L => {
+    const h = fitHints(L.item, L.place, body, S.profile);
+    return `<div class="hint"><span class="label">${slotNames[L.place.slot] || ''}</span><b>${esc(L.item.name || catLabel(L.item.category))}</b>${h.map(x => `<span>${esc(x)}</span>`).join('')}</div>`;
+  }).join('') || '<p class="muted">Pick a look to see it on you.</p>';
+  $('#look-notes').innerHTML = onYouNotes(body, missing);
+}
+
+let pieceFill = 0;
+async function fillPieceOnYou() {
+  const ticket = ++pieceFill;
+  const wrap = $('#piece-onyou .stagewrap'); if (!wrap || !S.draft) return;
+  const it = { ...(byId(S.draft.id) || {}), ...S.draft };
+  const { body, layers, missing } = await onYouLayers([it]);
+  if (ticket !== pieceFill || !wrap.isConnected) return;
+  if (!layers.length) { $('#piece-onyou').innerHTML = `<span class="label">On you</span>${onYouNotes(body, missing) || ''}`; return; }
+  renderStage(wrap, body, layers, { maxH: 0.6, key: 'piece:' + it.id });
+  $('#piece-hints').innerHTML = fitHints(it, layers[0].place, body, S.profile).map(x => `<span>${esc(x)}</span>`).join('');
+  $('#piece-notes').innerHTML = onYouNotes(body, 0);
+}
+
 // ------------------------------------------------------------------ look (today)
 function shuffle() {
   S.today.outfit = suggestOutfit(S.items, { tempC: S.today.feels ?? S.today.tempC, style: S.today.style, today: todayStr() }, Math.random, S.today.locked);
@@ -712,7 +798,7 @@ function lookView() {
   const lookNo = S.wears.length + 1;
   const date = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
   return `
-    <section class="lookhead">
+    <section class="lookhead ${S.lookMode === 'body' ? 'compact' : ''}">
       <span class="label">${esc(date)}</span>
       <h2 class="display hero-title">Look ${lookNo}</h2>
       <div class="weather">
@@ -728,7 +814,15 @@ function lookView() {
       <div class="row">${['', ...STYLES].map(s => `<button class="textbtn" data-action="style" data-style="${s}" aria-pressed="${t.style === s}">${s || 'Any style'}</button>`).join('')}</div>
     </div>
     ${wearable < 3 ? '<p class="muted">Add a few tops, bottoms and shoes to the archive and looks will appear here.</p>' : ''}
-    ${boardHtml(o, t.fresh)}
+    <div class="seg viewmode" role="group" aria-label="View">
+      <button type="button" data-action="look-mode" data-mode="flat" aria-pressed="${S.lookMode !== 'body'}">Flat-lay</button>
+      <button type="button" data-action="look-mode" data-mode="body" aria-pressed="${S.lookMode === 'body'}">On you</button>
+    </div>
+    ${S.lookMode === 'body' ? `<div class="onyou" id="look-onyou">
+      <div class="stagewrap"><div class="stage-loading"></div></div>
+      <div class="onyou-side">${sideToggle()}<div class="hints" id="look-hints"></div><div id="look-notes"></div>
+        <p class="hint-drag">Drag the figure to turn it.</p></div>
+    </div>` : boardHtml(o, t.fresh)}
     <div class="lookpieces">
       ${Object.entries(o).map(([slot, it]) => `
         <div class="lp">
@@ -1037,7 +1131,7 @@ function fittingView() {
       <div class="row">
         <button class="btn" data-action="backup">Download backup</button>
         <button class="btn quiet" data-action="restore">Restore backup</button>
-        ${needsCleanup().length ? `<button class="btn" data-action="clean-all">Clean up photos (${needsCleanup().length})</button>` : ''}
+        ${needsCleanup().length ? `<button class="btn" data-action="clean-all">Prepare photos (${needsCleanup().length})</button>` : ''}
         ${S.store.mode === 'cloud' ? '<button class="btn danger" data-action="signout">Sign out</button>' : ''}
       </div>
     </section></div>`;
@@ -1169,19 +1263,9 @@ async function restore(file) {
 
 // ------------------------------------------------------------------ background cleanup for existing pieces
 const isOldCut = p => /\.png$/.test(p || '');
-function needsCleanup() {
-  return S.items.filter(i => (i.photo_path && !i.cut_path) || (i.back_path && !i.back_cut_path) || isOldCut(i.cut_path) || isOldCut(i.back_cut_path));
-}
-
-// Upgrade an older transparent PNG cutout to the light studio JPEG, without rerunning the model.
-async function upgradeCut(it, field, kind) {
-  try {
-    const out = await finishCutout(await S.store.getBlob(it[field]));
-    const path = await S.store.uploadPhoto(S.store.photoPath(it.id, kind, out.type), out);
-    await S.store.removePhoto(it[field]).catch(() => {});
-    return path;
-  } catch (e) { console.warn('upgrade failed', e); return it[field]; }
-}
+const needsFront = i => i.photo_path && (!i.cut_path || !i.fit_path || isOldCut(i.cut_path));
+const needsBack = i => i.back_path && (!i.back_cut_path || !i.back_fit_path || isOldCut(i.back_cut_path));
+function needsCleanup() { return S.items.filter(i => needsFront(i) || needsBack(i)); }
 
 let cleaning = false;
 async function cleanAll() {
@@ -1194,21 +1278,21 @@ async function cleanAll() {
     for (const it of todo) {
       n++;
       const row = { ...it }, label = 'No. ' + pad(it.no);
-      toast(`Cleaning up photos, ${n} of ${todo.length}`);
-      if (isOldCut(it.cut_path)) row.cut_path = await upgradeCut(it, 'cut_path', 'cut');
-      else if (it.photo_path && !it.cut_path) row.cut_path = await makeCutout(it.id, await S.store.getBlob(it.photo_path), 'cut', label);
-      if (isOldCut(it.back_cut_path)) row.back_cut_path = await upgradeCut(it, 'back_cut_path', 'backcut');
-      else if (it.back_path && !it.back_cut_path) row.back_cut_path = await makeCutout(it.id, await S.store.getBlob(it.back_path), 'backcut', label);
-      if (row.cut_path !== it.cut_path || row.back_cut_path !== it.back_cut_path) {
+      toast(`Preparing photos, ${n} of ${todo.length}`);
+      let changed = false;
+      if (needsFront(it)) changed = await applyCutout(row, it.id, await S.store.getBlob(it.photo_path), 'front', label) || changed;
+      if (needsBack(it)) changed = await applyCutout(row, it.id, await S.store.getBlob(it.back_path), 'back', label) || changed;
+      if (changed) {
         await guard(async () => {
           await S.store.updateMany([row]);
           S.items[S.items.findIndex(i => i.id === row.id)] = row; ok++;
           await refreshUrls([row]);
-          if (S.view === 'archive' && !$('#sheet-root').innerHTML) render(); // show each piece as it finishes
+          saveSnapshot();
+          if ((S.view === 'archive' || S.view === 'look') && !$('#sheet-root').innerHTML) render(); // show each piece as it finishes
         });
       }
     }
-    toast(`Cleaned up ${plural(ok, 'piece')}`);
+    toast(`Prepared ${plural(ok, 'piece')}`);
     render();
   } finally { cleaning = false; }
 }
@@ -1314,14 +1398,14 @@ document.addEventListener('click', async e => {
       const it = byId(d.id); if (!it) break;
       el.disabled = true; el.textContent = 'Working…';
       toast(back ? 'Redoing the back cutout' : 'Redoing the cutout');
-      const path = await makeCutout(it.id, await S.store.getBlob(back ? it.back_path : it.photo_path), back ? 'backcut' : 'cut', 'No. ' + pad(it.no));
-      if (path) {
-        const row = { ...it, [back ? 'back_cut_path' : 'cut_path']: path };
+      const row = { ...it };
+      if (await applyCutout(row, it.id, await S.store.getBlob(back ? it.back_path : it.photo_path), back ? 'back' : 'front', 'No. ' + pad(it.no))) {
         await guard(async () => {
           await S.store.updateMany([row]);
           S.items[S.items.findIndex(i => i.id === row.id)] = row;
-          S.draft[back ? 'back_cut_path' : 'cut_path'] = path;
+          for (const k of ['cut_path', 'fit_path', 'back_cut_path', 'back_fit_path']) S.draft[k] = row[k];
           await refreshUrls([row]);
+          saveSnapshot();
         });
         toast('Cutout redone');
       }
@@ -1345,6 +1429,8 @@ document.addEventListener('click', async e => {
     case 'style': S.today.style = el.dataset.style; S.today.locked = {}; shuffle(); render(); break;
     case 'shuffle': shuffle(); render(); break;
     case 'save-look': saveLookImage(); break;
+    case 'look-mode': S.lookMode = el.dataset.mode; try { localStorage.setItem('lookMode', S.lookMode); } catch {} transition(render); break;
+    case 'spin': { const st = el.closest('.onyou')?.querySelector('.stage3d'); if (st) spinTo(st, el.dataset.to); break; }
     case 'lock': { const slot = el.dataset.slot; S.today.locked[slot] ? delete S.today.locked[slot] : (S.today.locked[slot] = S.today.outfit[slot]); render(); break; }
     case 'swap': {
       const slot = el.dataset.slot, cur = S.today.outfit[slot];
@@ -1400,7 +1486,7 @@ document.addEventListener('change', async e => {
     const k = t.dataset.draft;
     S.draft[k] = t.type === 'checkbox' ? t.checked : t.value;
     if (k === 'category') { const y = $('.sheet').scrollTop; renderEditor(); $('.sheet').scrollTop = y; }
-    else refreshEditorBits();
+    else { refreshEditorBits(); if (k === 'length_cm' || k === 'width_cm') fillPieceOnYou(); }
   }
 });
 
