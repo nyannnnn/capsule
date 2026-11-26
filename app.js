@@ -1,9 +1,9 @@
 import {
   CATEGORIES, FATES, STYLES, SEASONS, REFERENCES, MODE_LABELS, itemWeight, shipPlan, marginalYenPerKg,
   measureCm, fitEstimate, similarTo, colourFamily, suggestOutfit, outfitTip, parseDecisions, claudeSummary,
-} from './logic.js?v=202611252057';
-import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611252057';
-import { cutout, finish as finishCutout, preload as preloadCutouts } from './bg.js?v=202611252057';
+} from './logic.js?v=202611260937';
+import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611260937';
+import { cutout, finish as finishCutout, preload as preloadCutouts } from './bg.js?v=202611260937';
 
 // ------------------------------------------------------------------ state
 const DEFAULT_SETTINGS = { boxTareKg: 1, carryLimitKg: 30, house: 'Max Luo', departure: '2026-12-17' };
@@ -79,9 +79,9 @@ function toast(msg, undo = null) {
 // Fate changes with Undo.
 async function changeFates(changes, msg) {
   const before = changes.map(({ id }) => ({ id, fate: byId(id)?.fate || 'undecided' }));
-  await setFates(changes);
+  const ok = await setFates(changes);
   render();
-  toast(msg, async () => { await setFates(before); render(); toast('Undone'); });
+  if (ok) toast(msg, async () => { await setFates(before); render(); toast('Undone'); }); // a failed save keeps its error toast
 }
 
 // Deletes wait five seconds so they can be undone; leaving the app finishes them straight away.
@@ -105,7 +105,11 @@ async function flushDeletes() {
   for (const { it, timer } of all) { clearTimeout(timer); await guard(() => S.store.deleteItem(it), 'Couldn’t delete'); }
 }
 async function guard(fn, failMsg = 'Didn’t save') {
-  try { return await fn(); } catch (e) { console.error(e); toast(`${failMsg}: ${e.message || e}`); }
+  try { return await fn(); } catch (e) {
+    console.error(e);
+    const offline = !navigator.onLine || /fetch|network|load failed/i.test(e.message || '');
+    toast(offline ? 'No connection. That change didn’t save' : `${failMsg}: ${e.message || e}`);
+  }
 }
 
 // Replacing a focused input fires blur/change mid-swap; ignore re-entrant paints.
@@ -151,10 +155,28 @@ async function refreshUrls(items = S.items) {
   const paths = items.flatMap(i => Object.keys(PHOTO_KEYS).map(k => i[k])).filter(Boolean);
   Object.assign(S.urls, await S.store.photoUrls(paths));
 }
+// Last good copy of the archive, shown when the database can't be reached (no signal, or blocked).
+function saveSnapshot() {
+  if (S.store.mode !== 'cloud') return;
+  try { localStorage.setItem('snapshot', JSON.stringify({ at: Date.now(), items: S.items, profile: S.profile, wears: S.wears, urls: S.urls })); } catch {}
+}
+function loadSnapshot() {
+  try {
+    const snap = JSON.parse(localStorage.getItem('snapshot') || 'null');
+    if (!snap?.items) return false;
+    Object.assign(S, { items: snap.items, profile: snap.profile || {}, wears: snap.wears || [], urls: { ...snap.urls, ...S.urls }, offline: snap.at });
+    return true;
+  } catch { return false; }
+}
+const offlineNote = () => S.offline
+  ? `<div class="offlinebar" role="status">Offline. Showing your archive as of ${esc(new Date(S.offline).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }))}. Changes won’t save until you’re back online.</div>` : '';
+
 async function loadAll() {
   const [items, profile, wears] = await Promise.all([S.store.listItems(), S.store.getProfile(), S.store.listWears()]);
   S.items = items.filter(i => !pendingDeletes.has(i.id)); S.profile = profile || {}; S.wears = wears || [];
   await refreshUrls();
+  S.offline = false;
+  saveSnapshot();
 }
 
 function photo(it, kind = 'thumb') {
@@ -191,7 +213,7 @@ function render() {
         <button class="iconbtn addicon" data-action="add" aria-label="Add pieces"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
       </div>
     </header>
-    <main><div class="view" data-view="${S.view}">${views[S.view]()}</div></main>
+    <main>${offlineNote()}<div class="view" data-view="${S.view}">${views[S.view]()}</div></main>
     <nav class="tabbar" aria-label="Sections">${tabs()}</nav>
     ${installTip()}
     <input type="file" id="pick" accept="image/*" multiple hidden>
@@ -928,9 +950,11 @@ function pileHtml(list, fate) {
 
 async function setFates(changes) {
   const rows = changes.map(({ id, fate }) => ({ ...byId(id), fate })).filter(r => r.id);
-  await guard(async () => {
+  return guard(async () => {
     await S.store.updateMany(rows);
     rows.forEach(r => { S.items[S.items.findIndex(i => i.id === r.id)] = r; });
+    saveSnapshot();
+    return true;
   });
 }
 
@@ -1341,8 +1365,8 @@ document.addEventListener('click', async e => {
       const pile = S.items.filter(i => i.fate === 'ship' && !i.away);
       if (!pile.length) return toast('Already marked as posted');
       if (!(await ask(`Mark ${plural(pile.length, 'piece')} as posted? They’ll leave your daily looks.`, 'Mark as posted'))) return;
-      await guard(async () => { const rows = pile.map(i => ({ ...i, away: true })); await S.store.updateMany(rows); rows.forEach(r => { S.items[S.items.findIndex(i => i.id === r.id)] = r; }); });
-      render(); toast('Marked as posted'); break;
+      const ok = await guard(async () => { const rows = pile.map(i => ({ ...i, away: true })); await S.store.updateMany(rows); rows.forEach(r => { S.items[S.items.findIndex(i => i.id === r.id)] = r; }); return true; });
+      render(); if (ok) toast('Marked as posted'); break;
     }
     case 'delete-tossed': {
       const pile = S.items.filter(i => i.fate === 'toss');
@@ -1511,7 +1535,7 @@ let lastSync = Date.now(), syncing = false;
 const signature = () => JSON.stringify([S.items, S.wears.length, S.profile]);
 async function syncNow(force = false) {
   if (syncing || S.needSignIn || S.loading || S.store.mode !== 'cloud') return;
-  if (!force && Date.now() - lastSync < 15000) return;
+  if (!force && !S.offline && Date.now() - lastSync < 15000) return;
   if ($('#sheet-root').innerHTML || /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName)) return; // never yank a screen you're editing
   syncing = true;
   try {
@@ -1521,7 +1545,7 @@ async function syncNow(force = false) {
     if (signature() !== before) {
       if (S.today.outfit) for (const k of Object.keys(S.today.outfit)) S.today.outfit[k] = S.today.outfit[k] && byId(S.today.outfit[k].id) || null;
       const y = scrollY; render(); scrollTo(0, y);
-    }
+    } else if (!S.offline && $('.offlinebar')) render();
   } catch (e) { console.warn('sync failed', e); } finally { syncing = false; }
 }
 document.addEventListener('visibilitychange', () => {
@@ -1529,19 +1553,28 @@ document.addEventListener('visibilitychange', () => {
   else flushDeletes();
 });
 addEventListener('focus', () => syncNow());
+addEventListener('online', () => syncNow(true));
 addEventListener('pagehide', () => { flushDeletes(); });
 
 // ------------------------------------------------------------------ boot
 (async () => {
   try { const t = localStorage.getItem('theme'); if (t) document.documentElement.dataset.theme = t; } catch {}
+  if ('serviceWorker' in navigator && location.protocol === 'https:' || location.hostname === 'localhost') {
+    navigator.serviceWorker?.register('sw.js').catch(e => console.warn('offline cache unavailable', e));
+  }
   try {
     const { signedIn } = await S.store.init();
     if (!signedIn) { S.needSignIn = true; render(); return; }
     S.loading = true; render();
-    await loadAll();
+    try { await loadAll(); }
+    catch (e) {
+      if (!loadSnapshot()) throw e; // nothing saved yet: show the real error
+      console.warn('database unreachable, showing saved archive', e);
+    }
     S.loading = false; lastSync = Date.now();
     render();
   } catch (e) {
+    if (loadSnapshot()) { S.loading = false; render(); return; } // the library or database couldn't load at all
     console.error(e);
     $('#app').innerHTML = `<section class="empty" style="padding:20vh var(--gutter)"><h2 class="display page-title">The archive didn’t open.</h2>
       <p class="muted">${esc(e.message)}. Check config.js and your connection, then reload.</p></section>`;

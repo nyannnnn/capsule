@@ -57,6 +57,7 @@ This assumes the card and garment lie in the same plane and the photo is shot st
 - **Offline mode:** with `config.js` empty, everything runs from IndexedDB in the browser instead. No account needed to try it.
 - **Background removal:** [@imgly/background-removal](https://github.com/imgly/background-removal-js) (AGPL-3.0), running on-device. The small model downloads once, about 40 MB, then is cached. Uncertain edges are settled by a colour check: the garment and backdrop colours are learned from the confident pixels, and the cutout grows outward through clearly garment-coloured pixels, which recovers sleeves the model hesitates on against textured backgrounds. Cutouts then keep only the main object (so a reference card beside the garment drops out), are trimmed, and are saved as roughly 20 KB JPEGs on the studio colour with the shadow baked in.
 - **Weather:** [Open-Meteo](https://open-meteo.com), which needs no API key.
+- **Works behind the Great Firewall:** fonts and libraries ship with the app instead of loading from Google Fonts or public CDNs. A service worker caches the app, photos and the cutout model, so it opens instantly and keeps working on a weak or blocked connection, showing the last-synced archive until the database is reachable again.
 - **Sync:** data refreshes whenever the app regains focus, so a phone and a laptop stay in step without reloading. Deletes wait five seconds for an Undo before they reach the database.
 - **Motion:** view transitions morph a grid photo into its product page. Pieces cascade in, the bag bar fills block by block, and all of it rests under `prefers-reduced-motion`.
 
@@ -68,6 +69,8 @@ styles.css            design system: Bodoni Moda + Inter Tight, black and white,
 app.js                screens, interactions, transitions
 logic.js              pure functions: rates, measuring, fit, outfits, similarity, export
 store.js              storage adapter: Supabase, or IndexedDB when no keys are set
+sw.js                 offline cache for the app, photos and cutout model
+fonts/, vendor/       self-hosted fonts and bundled libraries (Supabase JS, background removal)
 bg.js                 background removal and trimming
 schema.sql            tables, photo bucket, row level security
 ```

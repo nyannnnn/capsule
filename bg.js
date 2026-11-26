@@ -1,6 +1,6 @@
 // Background removal, run entirely in the browser with @imgly/background-removal (AGPL-3.0).
 // The first use downloads the model (~40 MB); the browser caches it after that.
-const LIB = 'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.7.0/+esm';
+const LIB = './vendor/bg-removal-1.7.0.js'; // bundled locally; the model files still come from IMG.LY and are cached by sw.js
 let libPromise;
 const lib = () => (libPromise ||= import(LIB).catch(e => { libPromise = null; throw e; }));
 
@@ -11,6 +11,7 @@ export async function cutout(blob, onProgress) {
   const { removeBackground } = await lib();
   const png = await removeBackground(blob, {
     model: 'isnet_quint8',
+    device: 'cpu',
     output: { format: 'image/png' },
     progress: (key, current, total) => onProgress?.(key, current, total),
   });

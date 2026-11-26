@@ -1,5 +1,5 @@
 // Storage: Supabase when config.js has keys, otherwise this device only (IndexedDB).
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=202611252057';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=202611260937';
 
 export const cloudEnabled = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 
@@ -96,7 +96,7 @@ class LocalStore {
 class CloudStore {
   constructor() { this.mode = 'cloud'; this.urlCache = new Map(); }
   async init() {
-    const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
+    const { createClient } = await import('./vendor/supabase-2.119.0.js');
     this.sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true } });
     const { data } = await this.sb.auth.getSession();
     this.user = data.session?.user || null;
