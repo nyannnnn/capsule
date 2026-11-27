@@ -364,7 +364,7 @@ export function placeGarment(item, m, body) {
     if (tall < length * 0.85 || tall > length * maxTall) s = length / (m.h * (item.category === 'hoodie' ? 0.75 : 0.95));
     const W = m.w * s, H = m.h * s;
     const hemY = body.neckY + length;
-    return { slot, x: -W / 2, y: hemY - H, w: W, h: H, hemY, scale: s, layer: slot === 'outer' ? 3 : 2 };
+    return { slot, x: -W / 2, y: hemY - H, w: W, h: H, hemY, scale: s, layer: slot === 'outer' ? 3 : 2, torsoCm: (m.torsoPx || 0) * s || null };
   }
   if (slot === 'bottom') {
     const topY = body.waistY + (body.hipY - body.waistY) * 0.25; // trousers sit just below the natural waist

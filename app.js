@@ -2,10 +2,11 @@ import {
   CATEGORIES, FATES, STYLES, SEASONS, REFERENCES, MODE_LABELS, itemWeight, shipPlan, marginalYenPerKg,
   measureCm, fitEstimate, similarTo, colourFamily, suggestOutfit, outfitTip, parseDecisions, claudeSummary,
   bodyModel, placeGarment, fitHints,
-} from './logic.js?v=202611261208';
-import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611261208';
-import { cutout, preload as preloadCutouts } from './bg.js?v=202611261208';
-import { measure, renderStage, spinTo } from './tryon.js?v=202611261208';
+} from './logic.js?v=202611271136';
+import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611271136';
+import { cutout, preload as preloadCutouts } from './bg.js?v=202611271136';
+import { renderStage3D, spinTo3D, webglAvailable } from './tryon3d.js?v=202611271136';
+import { measure, renderStage, spinTo } from './tryon.js?v=202611271136';
 
 // ------------------------------------------------------------------ state
 const DEFAULT_SETTINGS = { boxTareKg: 1, carryLimitKg: 30, house: 'Max Luo', departure: '2026-12-17' };
@@ -735,10 +736,11 @@ async function onYouLayers(pieces) {
     if (!it.fit_path) { missing++; continue; }
     try {
       const get = p => S.store.getBlob(p);
-      const place = placeGarment(it, await measure(it.fit_path, get), body);
+      const m = await measure(it.fit_path, get), place = placeGarment(it, m, body);
       if (!place) continue;
-      const L = { item: it, place, front: S.urls[it.fit_path] };
-      if (it.back_fit_path) { L.back = S.urls[it.back_fit_path]; L.backPlace = placeGarment(it, await measure(it.back_fit_path, get), body); }
+      const L = { item: it, place, m, front: S.urls[it.fit_path], frontPath: it.fit_path, backPath: it.back_fit_path || null };
+      if (place.slot === 'shoes') L.colour = swatches[swatchKey(it)] || await sampleColour(await get(swatchKey(it)), !!it.cut_path).catch(() => null);
+      if (it.back_fit_path) { L.back = S.urls[it.back_fit_path]; L.backM = await measure(it.back_fit_path, get); L.backPlace = placeGarment(it, L.backM, body) || place; }
       else { L.back = await mirroredUrl(it.fit_path); L.backPlace = place; L.shadeBack = true; }
       if (L.front) layers.push(L);
     } catch (e) { console.warn('On you: skipped', it.no, e); missing++; }
@@ -757,13 +759,26 @@ const sideToggle = () => `<div class="seg sidetoggle" role="group" aria-label="T
   <button type="button" data-action="spin" data-to="back" aria-pressed="false">Back</button></div>`;
 
 let lookFill = 0;
+// Real 3D where the device supports it; the CSS turntable otherwise (or if 3D fails to start).
+const use3D = webglAvailable();
+let pieceKeyShown = null;
+async function showStage(wrap, body, layers, opts) {
+  if (use3D) {
+    try { await renderStage3D(wrap, body, layers, { ...opts, getBlob: p => S.store.getBlob(p) }); wrap.dataset.mode = '3d'; return; }
+    catch (e) { console.warn('3D unavailable, using the 2D turntable', e); }
+  }
+  wrap.dataset.mode = '2d';
+  renderStage(wrap, body, layers, opts);
+}
+
 async function fillLookOnYou() {
   const ticket = ++lookFill;
   const wrap = $('#look-onyou .stagewrap'); if (!wrap) return;
   const slotNames = { top: 'Top', outer: 'Outerwear', bottom: 'Bottom', shoes: 'Shoes', sport: 'Training' };
   const { body, layers, missing } = await onYouLayers(Object.values(S.today.outfit || {}));
   if (ticket !== lookFill || !wrap.isConnected) return;
-  renderStage(wrap, body, layers, { maxH: innerWidth < 900 ? 0.62 : 0.74 });
+  await showStage(wrap, body, layers, { key: 'look', maxH: innerWidth < 900 ? 0.62 : 0.74 });
+  if (ticket !== lookFill) return;
   $('#look-hints').innerHTML = layers.filter(L => L.place.slot !== 'shoes').map(L => {
     const h = fitHints(L.item, L.place, body, S.profile);
     return `<div class="hint"><span class="label">${slotNames[L.place.slot] || ''}</span><b>${esc(L.item.name || catLabel(L.item.category))}</b>${h.map(x => `<span>${esc(x)}</span>`).join('')}</div>`;
@@ -779,7 +794,9 @@ async function fillPieceOnYou() {
   const { body, layers, missing } = await onYouLayers([it]);
   if (ticket !== pieceFill || !wrap.isConnected) return;
   if (!layers.length) { $('#piece-onyou').innerHTML = `<span class="label">On you</span>${onYouNotes(body, missing) || ''}`; return; }
-  renderStage(wrap, body, layers, { maxH: 0.6, key: 'piece:' + it.id });
+  const reset = pieceKeyShown !== it.id; pieceKeyShown = it.id;
+  await showStage(wrap, body, layers, { maxH: 0.6, key: use3D ? 'piece' : 'piece:' + it.id, reset });
+  if (ticket !== pieceFill) return;
   $('#piece-hints').innerHTML = fitHints(it, layers[0].place, body, S.profile).map(x => `<span>${esc(x)}</span>`).join('');
   $('#piece-notes').innerHTML = onYouNotes(body, 0);
 }
@@ -1430,7 +1447,12 @@ document.addEventListener('click', async e => {
     case 'shuffle': shuffle(); render(); break;
     case 'save-look': saveLookImage(); break;
     case 'look-mode': S.lookMode = el.dataset.mode; try { localStorage.setItem('lookMode', S.lookMode); } catch {} transition(render); break;
-    case 'spin': { const st = el.closest('.onyou')?.querySelector('.stage3d'); if (st) spinTo(st, el.dataset.to); break; }
+    case 'spin': {
+      const box = el.closest('.onyou'), wrap = box?.querySelector('.stagewrap');
+      if (wrap?.dataset.mode === '3d') spinTo3D(box.id === 'look-onyou' ? 'look' : 'piece', el.dataset.to);
+      else { const st = box?.querySelector('.stage3d'); if (st) spinTo(st, el.dataset.to); }
+      break;
+    }
     case 'lock': { const slot = el.dataset.slot; S.today.locked[slot] ? delete S.today.locked[slot] : (S.today.locked[slot] = S.today.outfit[slot]); render(); break; }
     case 'swap': {
       const slot = el.dataset.slot, cur = S.today.outfit[slot];

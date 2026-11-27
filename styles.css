@@ -622,3 +622,8 @@ img.fade.in { opacity: 1; filter: none; }
 
 .lookhead.compact { padding-bottom: 10px; }
 .lookhead.compact .hero-title { font-size: clamp(36px, 4.4vw, 60px); }
+
+/* ---------- 3D stage ---------- */
+.stagewrap[data-mode="3d"] { padding: 0; display: block; }
+.stagewrap canvas.stage3d-gl { display: block; width: 100%; cursor: grab; outline: none; }
+.stagewrap canvas.stage3d-gl:active { cursor: grabbing; }

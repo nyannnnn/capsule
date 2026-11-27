@@ -1,5 +1,5 @@
 // Storage: Supabase when config.js has keys, otherwise this device only (IndexedDB).
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=202611261208';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js?v=202611271136';
 
 export const cloudEnabled = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
 

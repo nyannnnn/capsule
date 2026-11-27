@@ -1,11 +1,12 @@
 // "On you": a true-to-scale 3D turntable. Your figure is drawn from your measurements; each garment is a
 // transparent cutout scaled to its measured centimetres and layered at depth in front of it. Drag to turn;
 // past the side it switches to the back photos. Plain CSS 3D, so it stays light, fast and offline.
-import { bodyModel, placeGarment } from './logic.js?v=202611261208';
+import { bodyModel, placeGarment } from './logic.js?v=202611271136';
 
 // ---------------------------------------------------------------- garment image metrics
-const metrics = (() => { try { return JSON.parse(localStorage.getItem('fitm') || '{}'); } catch { return {}; } })();
-const saveMetrics = () => { try { localStorage.setItem('fitm', JSON.stringify(metrics)); } catch {} };
+const METRICS_KEY = 'fitm3'; // v2 adds sleeve axes
+const metrics = (() => { try { return JSON.parse(localStorage.getItem(METRICS_KEY) || '{}'); } catch { return {}; } })();
+const saveMetrics = () => { try { localStorage.setItem(METRICS_KEY, JSON.stringify(metrics)); } catch {} };
 
 // Width of the garment's body (not its sleeves) across the lower torso, plus its pixel size.
 export async function measure(path, getBlob) {
@@ -34,9 +35,65 @@ export async function measure(path, getBlob) {
   }
   runs.sort((p, q) => p - q);
   const torso = runs.length ? runs[Math.floor(runs.length / 2)] : 0;
-  const m = { w: bmp.width, h: bmp.height, torsoPx: torso ? torso / s : 0 };
+  const m = { w: bmp.width, h: bmp.height, torsoPx: torso ? torso / s : 0, sleeves: sleeveAxes(a, W, H, torso, s) };
   metrics[path] = m; saveMetrics();
   return m;
+}
+
+// Each sleeve's axis in the photo: where it leaves the body, which way it points, how long and wide it is.
+// The shoulder corner is where the torso's edge meets the top of the garment; the cuff is the far end of
+// the pixels that stand free of the body; the width is read across the sleeve near the cuff.
+// Returned in the image's natural pixels; null for a side with no clear sleeve (arms folded in, sleeveless).
+function sleeveAxes(a, W, H, torso, s) {
+  if (!torso) return null;
+  const solid = (x, y) => x >= 0 && y >= 0 && x < W && y < H && a[(Math.round(y) * W + Math.round(x)) * 4 + 3] > 40;
+  const cx = W / 2, half = torso / 2, out = {};
+  for (const side of [1, -1]) {
+    const key = side > 0 ? 'R' : 'L', edge = Math.round(cx + side * half);
+    let sy = 0; while (sy < H && !solid(edge, sy)) sy++;
+    if (sy >= H * 0.5) { out[key] = null; continue; }
+    // Free pixels: in a run that starts outside the torso band (not body that flares past it).
+    const free = [];
+    for (let y = 0; y < H; y++) {
+      let x = edge + side, inBody = solid(edge, y);
+      for (; side > 0 ? x < W : x >= 0; x += side) {
+        const on = solid(x, y);
+        if (!on) inBody = false; else if (!inBody) free.push(x, y);
+      }
+    }
+    if (free.length < W * H * 0.006) { out[key] = null; continue; }
+    const d2 = []; for (let i = 0; i < free.length; i += 2) d2.push((free[i] - edge) ** 2 + (free[i + 1] - sy) ** 2);
+    const cut = [...d2].sort((p, q) => q - p)[Math.max(0, Math.floor(d2.length * 0.03))];
+    let Cx = 0, Cy = 0, nC = 0;
+    for (let i = 0; i < d2.length; i++) if (d2[i] >= cut) { Cx += free[i * 2]; Cy += free[i * 2 + 1]; nC++; }
+    Cx /= nC; Cy /= nC;
+    const across = (px, py, ux, uy) => { // the solid span through (px, py) along ±(ux, uy)
+      let l = 0, r = 0, lim = Math.max(W, H);
+      while (l < lim && solid(px - ux * (l + 1), py - uy * (l + 1))) l++;
+      while (r < lim && solid(px + ux * (r + 1), py + uy * (r + 1))) r++;
+      return [l, r];
+    };
+    const len0 = Math.hypot(Cx - edge, Cy - sy), ux = (Cx - edge) / len0, uy = (Cy - sy) / len0;
+    // Re-centre on the sleeve: read its span at two points down the sleeve and run the axis through their
+    // centres (a span that runs on into the body is capped by the other side).
+    const centre = t => {
+      const px = edge + ux * len0 * t, py = sy + uy * len0 * t;
+      if (!solid(px, py)) return null;
+      let [l, r] = across(px, py, -uy, ux); l = Math.min(l, r * 1.6); r = Math.min(r, l * 1.6);
+      return { x: px + (-uy) * (r - l) / 2, y: py + ux * (r - l) / 2, hw: (l + r) / 2 };
+    };
+    const q1 = centre(0.5), q2 = centre(0.82);
+    let dx = ux, dy = uy, ox = edge, oy = sy, hw = 0;
+    if (q1 && q2 && Math.hypot(q2.x - q1.x, q2.y - q1.y) > 3) {
+      const ql = Math.hypot(q2.x - q1.x, q2.y - q1.y); dx = (q2.x - q1.x) / ql; dy = (q2.y - q1.y) / ql;
+      const t0 = (edge - q1.x) * dx + (sy - q1.y) * dy; ox = q1.x + dx * t0; oy = q1.y + dy * t0; hw = (q1.hw + q2.hw) / 2;
+    } else if (q1 || q2) hw = (q1 || q2).hw;
+    if (!hw) { out[key] = null; continue; }
+    const len = (Cx - ox) * dx + (Cy - oy) * dy, halfW = Math.min(hw, len * 0.45);
+    if (len < 4) { out[key] = null; continue; }
+    out[key] = { x: ox / s, y: oy / s, dx, dy, len: len / s, halfW: halfW / s };
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- the figure (a croquis, in cm)
