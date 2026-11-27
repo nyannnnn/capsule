@@ -1,10 +1,11 @@
 // "On you": a true-to-scale 3D turntable. Your figure is drawn from your measurements; each garment is a
 // transparent cutout scaled to its measured centimetres and layered at depth in front of it. Drag to turn;
 // past the side it switches to the back photos. Plain CSS 3D, so it stays light, fast and offline.
-import { bodyModel, placeGarment } from './logic.js?v=202611271136';
+import { bodyModel, placeGarment } from './logic.js?v=202611271153';
 
 // ---------------------------------------------------------------- garment image metrics
-const METRICS_KEY = 'fitm3'; // v2 adds sleeve axes
+const METRICS_KEY = 'fitm4'; // v4: sleeve axes and per-row outlines
+try { for (const k of ['fitm', 'fitm2', 'fitm3']) localStorage.removeItem(k); } catch {}
 const metrics = (() => { try { return JSON.parse(localStorage.getItem(METRICS_KEY) || '{}'); } catch { return {}; } })();
 const saveMetrics = () => { try { localStorage.setItem(METRICS_KEY, JSON.stringify(metrics)); } catch {} };
 
@@ -35,9 +36,44 @@ export async function measure(path, getBlob) {
   }
   runs.sort((p, q) => p - q);
   const torso = runs.length ? runs[Math.floor(runs.length / 2)] : 0;
-  const m = { w: bmp.width, h: bmp.height, torsoPx: torso ? torso / s : 0, sleeves: sleeveAxes(a, W, H, torso, s) };
+  const m = { w: bmp.width, h: bmp.height, torsoPx: torso ? torso / s : 0, sleeves: sleeveAxes(a, W, H, torso, s), rows: rowSpans(a, W, H, torso, s) };
   metrics[path] = m; saveMetrics();
   return m;
+}
+
+// Where the garment's body sits on each row of the photo, so the 3D shell can wrap exactly that span
+// from side seam to side seam (no gaps at the sides, no stretched streaks). Every other analysis row, in
+// natural pixels: body = [left, right] of the torso (sleeves excluded); legs = [l1, r1, l2, r2], the two
+// legs of a pair of trousers (one run is split down the middle). Rows with nothing are null.
+function rowSpans(a, W, H, torso, s) {
+  const solid = (x, y) => a[(y * W + x) * 4 + 3] > 40;
+  const cx = Math.floor(W / 2), half = torso ? torso / 2 : W / 2, band = half * 1.04, R = 1 / s;
+  const body = [], legs = [];
+  for (let y = 0; y < H; y += 2) {
+    const upper = y < H * 0.45, lim = upper ? band : W;
+    let l = -1, r = -1;
+    if (solid(cx, y)) { // grow from the centre, stepping over tiny gaps
+      l = r = cx; let gap = 0;
+      for (let x = cx - 1; x >= 0 && cx - x <= lim && gap < 3; x--) { if (solid(x, y)) { l = x; gap = 0; } else gap++; }
+      gap = 0;
+      for (let x = cx + 1; x < W && x - cx <= lim && gap < 3; x++) { if (solid(x, y)) { r = x; gap = 0; } else gap++; }
+    } else { // a neckline or an open front: the outermost fabric within the body's band
+      for (let x = Math.max(0, Math.floor(cx - band)); x < cx; x++) if (solid(x, y)) { l = x; break; }
+      for (let x = Math.min(W - 1, Math.ceil(cx + band)); x > cx; x--) if (solid(x, y)) { r = x; break; }
+    }
+    body.push(l >= 0 && r > l ? [Math.round(l * R), Math.round((r + 1) * R)] : null);
+    const runs = []; let st = -1, gap = 0;
+    for (let x = 0; x <= W; x++) {
+      const on = x < W && solid(x, y);
+      if (on) { if (st < 0) st = x; gap = 0; }
+      else if (st >= 0 && (++gap >= 2 || x === W)) { runs.push([st, x - gap + 1]); st = -1; gap = 0; }
+    }
+    if (!runs.length) { legs.push(null); continue; }
+    const L = runs[0], Rn = runs[runs.length - 1];
+    const sp = runs.length > 1 ? [L[0], L[1], Rn[0], Rn[1]] : [L[0], (L[0] + L[1]) / 2, (L[0] + L[1]) / 2, L[1]];
+    legs.push(sp.map(v => Math.round(v * R)));
+  }
+  return { body, legs, step: 2 * R }; // step: natural pixels per stored row
 }
 
 // Each sleeve's axis in the photo: where it leaves the body, which way it points, how long and wide it is.

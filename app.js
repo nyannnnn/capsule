@@ -2,11 +2,11 @@ import {
   CATEGORIES, FATES, STYLES, SEASONS, REFERENCES, MODE_LABELS, itemWeight, shipPlan, marginalYenPerKg,
   measureCm, fitEstimate, similarTo, colourFamily, suggestOutfit, outfitTip, parseDecisions, claudeSummary,
   bodyModel, placeGarment, fitHints,
-} from './logic.js?v=202611271136';
-import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611271136';
-import { cutout, preload as preloadCutouts } from './bg.js?v=202611271136';
-import { renderStage3D, spinTo3D, webglAvailable } from './tryon3d.js?v=202611271136';
-import { measure, renderStage, spinTo } from './tryon.js?v=202611271136';
+} from './logic.js?v=202611271153';
+import { createStore, uuid, compressPhoto, blobToDataUrl, dataUrlToBlob } from './store.js?v=202611271153';
+import { cutout, preload as preloadCutouts } from './bg.js?v=202611271153';
+import { renderStage3D, spinTo3D, webglAvailable } from './tryon3d.js?v=202611271153';
+import { measure, renderStage, spinTo } from './tryon.js?v=202611271153';
 
 // ------------------------------------------------------------------ state
 const DEFAULT_SETTINGS = { boxTareKg: 1, carryLimitKg: 30, house: 'Max Luo', departure: '2026-12-17' };
@@ -740,7 +740,11 @@ async function onYouLayers(pieces) {
       if (!place) continue;
       const L = { item: it, place, m, front: S.urls[it.fit_path], frontPath: it.fit_path, backPath: it.back_fit_path || null };
       if (place.slot === 'shoes') L.colour = swatches[swatchKey(it)] || await sampleColour(await get(swatchKey(it)), !!it.cut_path).catch(() => null);
-      if (it.back_fit_path) { L.back = S.urls[it.back_fit_path]; L.backM = await measure(it.back_fit_path, get); L.backPlace = placeGarment(it, L.backM, body) || place; }
+      if (it.back_fit_path) { L.back = S.urls[it.back_fit_path]; L.backM = await measure(it.back_fit_path, get);
+        // Both cutouts are cropped tight to the garment, so the back photo spans the same height: scale it
+        // to match, and the hem meets all the way round.
+        const k = place.h / L.backM.h, w = L.backM.w * k;
+        L.backPlace = { ...place, scale: k, w, x: -w / 2, torsoCm: (L.backM.torsoPx || 0) * k || place.torsoCm }; }
       else { L.back = await mirroredUrl(it.fit_path); L.backPlace = place; L.shadeBack = true; }
       if (L.front) layers.push(L);
     } catch (e) { console.warn('On you: skipped', it.no, e); missing++; }

@@ -16,10 +16,11 @@ export function webglAvailable() {
 // A loft through elliptical rings. Each ring: { c: [x, y, z], a: [ax, ay, az], b: [bx, by, bz], rx, rz }
 // where a and b are unit vectors spanning the ring's plane.
 function loft(rings, N = 36, { capStart = false, capEnd = false } = {}) {
-  const pos = [], idx = [];
+  const pos = [], idx = [], ang = [];
   for (const r of rings) {
     for (let j = 0; j < N; j++) {
       const t = (j / N) * Math.PI * 2, ca = Math.cos(t) * r.rx, sb = Math.sin(t) * r.rz;
+      ang.push(t);
       pos.push(r.c[0] + r.a[0] * ca + r.b[0] * sb, r.c[1] + r.a[1] * ca + r.b[1] * sb, r.c[2] + r.a[2] * ca + r.b[2] * sb);
     }
   }
@@ -28,7 +29,7 @@ function loft(rings, N = 36, { capStart = false, capEnd = false } = {}) {
     idx.push(a, d, b, b, d, c);
   }
   const cap = (ri, flip) => {
-    const r = rings[ri], center = pos.length / 3; pos.push(...r.c);
+    const r = rings[ri], center = pos.length / 3; pos.push(...r.c); ang.push(0);
     for (let j = 0; j < N; j++) {
       const a = ri * N + j, b = ri * N + (j + 1) % N;
       flip ? idx.push(center, b, a) : idx.push(center, a, b);
@@ -38,6 +39,7 @@ function loft(rings, N = 36, { capStart = false, capEnd = false } = {}) {
   if (capEnd) cap(rings.length - 1, true);
   const g = new T.BufferGeometry();
   g.setAttribute('position', new T.Float32BufferAttribute(pos, 3));
+  g.setAttribute('ang', new T.Float32BufferAttribute(ang, 1)); // each vertex's angle round its ring
   g.setIndex(idx);
   g.computeVertexNormals();
   return g;
@@ -70,6 +72,7 @@ function torsoRings(b, f, d = 0, ease = 0, hemYd = null) {
     H(0, f.Y(b.waistY), 0, Math.max(b.waistHalf + d, b.chestHalf * 0.86 + d + ease * 0.9), f.depth.waist + d + ease * 0.6),
     H(0, f.Y(b.hipY), 0, b.hipHalf + d + ease * 0.85, f.depth.hips + d + ease * 0.55),
   ];
+  if (hemYd != null) r.shift(); // a garment starts at the neckline, not up the neck
   if (hemYd == null) { // the mannequin: close at the crotch
     r.push(H(0, f.Y(b.crotchY - 2), 0, b.hipHalf * 0.94, f.depth.hips * 0.9), H(0, f.Y(b.crotchY + 0.6), 0, b.hipHalf * 0.5, f.depth.hips * 0.5));
   } else { // a garment shell continues past the hips as a straight drop to its hem
@@ -141,20 +144,16 @@ const SHORT = ['tshirt', 'polo', 'gym'], SLEEVELESS = ['tank'];
 const LAYER_D = { bottom: 0.9, top: 1.8, sport: 1.8, outer: 3.0 };
 
 // Project the photos onto a garment shell. Front-facing triangles take the front photo, back-facing the back.
-// uvFront / uvBack map a scene point (x, y) to texture coordinates in that photo.
-function projectPhotos(geoIndexed, uvFront, uvBack, hasBack) {
+// uvFront / uvBack map a shell point (x, y, ring angle t) to texture coordinates in that photo.
+function projectPhotos(geoIndexed, uvFront, uvBack) {
   const g = geoIndexed.toNonIndexed(); // keeps the smooth normals computed on the indexed shell
-  const p = g.attributes.position, nrm = g.attributes.normal, n = p.count, uv = new Float32Array(n * 2);
-  g.clearGroups();
+  const p = g.attributes.position, nrm = g.attributes.normal, ang = g.attributes.ang, n = p.count, uv = new Float32Array(n * 2);
   const tris = n / 3, front = [], back = [];
-  const v = new T.Vector3(), a = new T.Vector3(), c = new T.Vector3();
   for (let t = 0; t < tris; t++) {
-    const i0 = t * 3;
-    v.fromBufferAttribute(p, i0); a.fromBufferAttribute(p, i0 + 1); c.fromBufferAttribute(p, i0 + 2);
-    const nz = v.z + a.z + c.z; // which side of the body this face is on (shells are centred on z = 0)
-    (nz >= 0 ? front : back).push(t);
+    const i0 = t * 3, isBack = p.getZ(i0) + p.getZ(i0 + 1) + p.getZ(i0 + 2) < 0; // shells are centred on z = 0
+    (isBack ? back : front).push(t);
     for (let k = 0; k < 3; k++) {
-      const i = i0 + k, [u, w] = (nz < 0 && hasBack ? uvBack : uvFront)(p.getX(i), p.getY(i));
+      const i = i0 + k, [u, w] = (isBack ? uvBack : uvFront)(p.getX(i), p.getY(i), ang.getX(i));
       uv[i * 2] = u; uv[i * 2 + 1] = w;
     }
   }
@@ -176,90 +175,102 @@ function projectPhotos(geoIndexed, uvFront, uvBack, hasBack) {
   return out;
 }
 
-// A sleeve's photo runs along its own axis (it may hang straight down or reach out sideways), while the
-// 3D arm has a fixed angle. Map along the arm and across it, so the whole sleeve lands on the arm.
-function sleeveUV(b, f, side, sl, pl, ringR) {
-  const p0 = side > 0 ? f.shoulderR : f.shoulderL, dir = side > 0 ? f.dirR : f.dirL;
-  const dD = [dir[0], -dir[1]], nD = [-dD[1], dD[0]];        // arm axis and its normal, y-down
-  const dP = [sl.dx, sl.dy], nP = [-sl.dy, sl.dx];             // the same in the photo
-  const s = pl.scale, k = Math.max(0.8, Math.min(2.2, (sl.halfW * s) / ringR)); // flat width → round arm
-  const iw = pl.w / s, ih = pl.h / s;
-  return (x, y) => {
-    const rx = x - p0[0], ry = -(y - p0[1]);
-    // Stay inside the sleeve's own pixels: the arm's length already comes from the photo, and sampling past
-    // the sleeve's edge (around the shoulder cap) would cut holes where the background is.
-    const lim = sl.halfW * s * 0.55, a = Math.max(sl.len * s * 0.04, Math.min(sl.len * s * 0.97, rx * dD[0] + ry * dD[1]));
-    const c = Math.max(-lim, Math.min(lim, (rx * nD[0] + ry * nD[1]) * k));
-    const px = sl.x + (dP[0] * a + nP[0] * c) / s, py = sl.y + (dP[1] * a + nP[1] * c) / s;
-    return [px / iw, 1 - py / ih];
+// How far round the front a ring angle is: -1 at one side seam, 0 at the centre front, +1 at the other.
+// A flat-lay photo is the front half of the garment laid flat, so this is where the point sits across it.
+const across = t => {
+  let th = Math.atan2(Math.sin(t), Math.cos(t));
+  if (th < -Math.PI / 2) th += Math.PI * 2;
+  return Math.max(-0.97, Math.min(0.97, (Math.PI / 2 - th) / (Math.PI / 2)));
+};
+
+// Body and legs: each row of the shell wraps exactly the garment's span on that row of the photo.
+// pick(row, side) chooses the span: the torso, the whole waistband, or one leg.
+function wrapUV(b, P, m, pick) {
+  const rows = m?.rows;
+  if (!rows) return null;
+  return (x, y, t, side) => {
+    const py = (b.floor - y - P.y) / P.scale, v = 1 - py / m.h;
+    const list = pick.list(rows), i0 = Math.round(py / rows.step);
+    let row = null;
+    for (let d = 0; d <= 3 && !row; d++) row = list[i0 - d] || list[i0 + d] || null;
+    if (!row || i0 < -1 || i0 > list.length) return [-1, v]; // above or below the garment: cut away
+    const [l, r] = pick.span(row, side), q = across(t);
+    return [((l + r) / 2 + q * (r - l) / 2) / m.w, v];
   };
 }
+const BODY = { list: r => r.body, span: row => row };
+const WAIST = { list: r => r.legs, span: row => [row[0], row[3]] };
+const LEG = { list: r => r.legs, span: (row, side) => (side > 0 ? [row[2], row[3]] : [row[0], row[1]]) };
+
+// A sleeve's photo runs along its own axis (it may hang straight down or reach out sideways), while the
+// 3D arm has a fixed angle. Map along the arm, and round it from seam to seam across the sleeve's width.
+function sleeveUV(b, f, sl, P, m) {
+  return (x, y, t, side) => {
+    const p0 = side > 0 ? f.shoulderR : f.shoulderL, dir = side > 0 ? f.dirR : f.dirL;
+    const dD = [dir[0], -dir[1]];                                    // arm axis, y-down
+    const dP = [sl.dx, sl.dy], nP = [-sl.dy, sl.dx], s = P.scale;     // sleeve axis and its normal in the photo
+    const along = Math.max(sl.len * 0.04, Math.min(sl.len * 0.97, ((x - p0[0]) * dD[0] - (y - p0[1]) * dD[1]) / s));
+    const c = across(t) * sl.halfW * 0.92;
+    return [(sl.x + dP[0] * along + nP[0] * c) / m.w, 1 - (sl.y + dP[1] * along + nP[1] * c) / m.h];
+  };
+}
+
+// Seen from behind, a back photo is the front view of the garment reflected left to right: the point
+// (x, y, t) on one side reads like (-x, y, t + π) on the other. Without a back photo, the front photo
+// continues round the back unmirrored, so the side seams still meet.
+const fromBack = (fn, ownPhoto) => ownPhoto ? (x, y, t, side) => fn(-x, y, t + Math.PI, -side) : (x, y, t, side) => fn(x, y, -t, side);
 
 // fit: what the layers underneath already take up, so a coat always clears the tee inside it.
 function garmentMesh(b, f, L, texFront, texBack, fit = { ease: 0, sEase: 0 }) {
   const it = L.item, slot = L.place.slot, d = LAYER_D[slot] || 1.8;
   const W = L.place.torsoCm || null; // the photo's flat torso width, in cm
-  const geos = []; // { geo, side } — side 0 for the body, ±1 for a sleeve
-  let toFlat, sleeveRing = 0;
+  const geos = []; // { geo, side, kind }
   if (slot === 'bottom') {
     const top = b.waistY + (b.hipY - b.waistY) * 0.25, hem = L.place.hemY;
     const flatW = Number(it.width_cm) || null, k = b.hips * 0.125 / b.hipHalf;
     const easeHip = flatW ? Math.max(0, 2 * flatW / (Math.PI * (1 + k)) - b.hipHalf) : 2;
-    geos.push({ side: 0, geo: loft([H(0, f.Y(top), 0, b.waistHalf + d + easeHip * 0.5, f.depth.waist + d + easeHip * 0.3),
+    geos.push({ side: 0, kind: WAIST, geo: loft([H(0, f.Y(top), 0, b.waistHalf + d + easeHip * 0.5, f.depth.waist + d + easeHip * 0.3),
       H(0, f.Y(b.hipY), 0, b.hipHalf + d + easeHip, f.depth.hips + d + easeHip * 0.6),
       H(0, f.Y(b.crotchY - 1), 0, b.hipHalf * 0.98 + d + easeHip, f.depth.hips * 0.95 + d + easeHip * 0.6)], 40) });
-    for (const s of [1, -1]) geos.push({ side: 0, geo: loft(legRings(b, f, s, d, 2.2 + easeHip * 0.4, b.crotchY - 3, hem), 28) });
-    const ref = b.hipHalf + d + easeHip, photoHalf = (L.place.w * 0.92) / 2;
-    const kx = Math.max(0.8, Math.min(1.8, photoHalf / ref));
-    toFlat = (x, y) => [x * kx, b.floor - y];
+    for (const s of [1, -1]) geos.push({ side: s, kind: LEG, geo: loft(legRings(b, f, s, d, 2.2 + easeHip * 0.4, b.crotchY - 3, hem), 28) });
   } else {
     const chestK = (b.chest * 0.122) / b.chestHalf;
     const half = W ? 2 * W / (Math.PI * (1 + chestK)) : b.chestHalf + 4; // shell half-width from the flat width
     const ease = Math.max(0, half - b.chestHalf - d, fit.ease + 0.8);
     fit.ease = ease;
-    geos.push({ side: 0, geo: loft(torsoRings(b, f, d, ease, L.place.hemY), 44) });
-    // Sleeve length from the photo when both sleeves read clearly, else from the category.
+    geos.push({ side: 0, kind: BODY, geo: loft(torsoRings(b, f, d, ease, L.place.hemY), 44) });
+    // Sleeve length from the photo when the sleeves read clearly, else from the category.
     const sl = L.m?.sleeves, lens = sl ? [sl.R, sl.L].filter(Boolean).map(x => x.len * L.place.scale) : [];
     let sleeveLen = SLEEVELESS.includes(it.category) ? 0 : SHORT.includes(it.category) ? 21 : b.sleeve + 2;
     if (sleeveLen && lens.length) sleeveLen = Math.max(8, Math.min(b.sleeve + 6, lens.reduce((p, q) => p + q, 0) / lens.length));
-    const sEase = Math.max(Math.min(ease * 0.15 + 0.8, 3), fit.sEase + 0.3); // each layer's depth already adds a gap fit.sEase = sEase; sleeveRing = 4.2 + d + sEase;
-    if (sleeveLen) for (const s of [1, -1]) geos.push({ side: s, geo: loft(armRings(b, f, s, d, sEase, sleeveLen), 24) });
-    // Torso: the shell's sides map to the photo's side seams. Sleeves continue outward from the shoulder.
-    const shellHalf = b.chestHalf + d + ease, photoHalf = (W || shellHalf * 2) / 2;
-    const kx = Math.max(0.8, Math.min(1.9, photoHalf / shellHalf));
-    const shoulderX = b.shoulderHalf * 0.97 + d;
-    toFlat = (x, y) => {
-      const ax = Math.abs(x);
-      const fx = ax <= shoulderX ? x * kx : Math.sign(x) * (shoulderX * kx + (ax - shoulderX));
-      return [fx, b.floor - y];
-    };
+    const sEase = Math.max(Math.min(ease * 0.15 + 0.8, 3), fit.sEase + 0.3); // each layer's depth already adds a gap
+    fit.sEase = sEase;
+    if (sleeveLen) for (const s of [1, -1]) geos.push({ side: s, kind: 'sleeve', geo: loft(armRings(b, f, s, d, sEase, sleeveLen), 24) });
   }
-  const pl = L.place, bp = L.backPlace || L.place;
-  const flatUV = (P, mirror) => (x, y) => { const [fx, fy] = toFlat(x, y), X = mirror ? -fx : fx; return [(X - P.x) / P.w, 1 - (fy - P.y) / P.h]; };
-  const bodyFront = flatUV(pl, false), bodyBack = flatUV(bp, true); // seen from behind, left and right swap
-  const uvFor = side => {
-    if (!side) return [bodyFront, bodyBack];
-    const fs = L.m?.sleeves?.[side > 0 ? 'R' : 'L'];
-    const bs = (L.backM || L.m)?.sleeves?.[side > 0 ? 'L' : 'R']; // the back photo shows this arm on the other side
-    const front = fs ? sleeveUV(b, f, side, fs, pl, sleeveRing) : bodyFront;
-    let back = bodyBack;
-    if (bs && texBack) { const g = sleeveUV(b, f, -side, bs, bp, sleeveRing); back = (x, y) => g(-x, y); }
-    return [front, back];
+  const pl = L.place, bp = L.backPlace || L.place, mF = L.m, mB = texBack ? (L.backM || L.m) : L.m;
+  const uvFor = (kind, side) => {
+    let fr, bk;
+    if (kind === 'sleeve') {
+      const fs = mF?.sleeves?.[side > 0 ? 'R' : 'L'];
+      const bs = mB?.sleeves?.[side > 0 ? 'L' : 'R']; // the back photo shows this arm on the other side
+      fr = fs ? sleeveUV(b, f, fs, pl, mF) : wrapUV(b, pl, mF, BODY);
+      bk = texBack ? (bs ? fromBack(sleeveUV(b, f, bs, bp, mB), true) : fromBack(wrapUV(b, bp, mB, BODY), true)) : fromBack(fr, false);
+    } else {
+      fr = wrapUV(b, pl, mF, kind);
+      bk = fromBack(texBack ? wrapUV(b, bp, mB, kind) : fr, !!texBack);
+    }
+    return [(x, y, t) => fr(x, y, t, side), (x, y, t) => bk(x, y, t, side)];
   };
   const group = new T.Group();
-  const mats = [
-    new T.MeshStandardMaterial({ map: texFront.cut, alphaTest: 0.5, side: T.DoubleSide, roughness: 0.9, metalness: 0 }),
-    new T.MeshStandardMaterial({ map: (texBack || texFront).cut, alphaTest: 0.5, side: T.DoubleSide, roughness: 0.9, metalness: 0,
-      color: texBack ? 0xffffff : 0xd9d9d9 }), // no back photo: the front, slightly shaded
-  ];
-  // A sleeve mapped along its axis samples only inside the sleeve, so it needs no outline cut (which would
-  // otherwise nibble holes where the sleeve tapers).
-  const solid = [new T.MeshStandardMaterial({ map: texFront.padded, side: T.DoubleSide, roughness: 0.9, metalness: 0 }),
-    new T.MeshStandardMaterial({ map: (texBack || texFront).padded, side: T.DoubleSide, roughness: 0.9, metalness: 0, color: texBack ? 0xffffff : 0xd9d9d9 })];
-  for (const { geo, side } of geos) {
-    const [uf, ub] = uvFor(side);
-    const along = side && L.m?.sleeves?.[side > 0 ? 'R' : 'L'];
-    const m = new T.Mesh(projectPhotos(geo, uf, ub, !!texBack), along ? solid : mats);
+  const mat = (tex, shade, cut) => new T.MeshStandardMaterial({ map: cut ? tex.cut : tex.padded, alphaTest: cut ? 0.5 : 0,
+    side: T.DoubleSide, roughness: 0.9, metalness: 0, color: shade ? 0xd9d9d9 : 0xffffff }); // no back photo: the front, slightly shaded
+  const cutMats = [mat(texFront, false, true), mat(texBack || texFront, !texBack, true)];
+  // Sleeves sample only inside the sleeve, so they need no outline cut (it would nibble holes where a
+  // sleeve tapers); their texture has its edge colours spread outward instead.
+  const solidMats = [mat(texFront, false, false), mat(texBack || texFront, !texBack, false)];
+  for (const { geo, side, kind } of geos) {
+    const [uf, ub] = uvFor(kind, side);
+    const m = new T.Mesh(projectPhotos(geo, uf, ub), kind === 'sleeve' ? solidMats : cutMats);
     m.castShadow = true; m.receiveShadow = true;
     group.add(m);
   }
